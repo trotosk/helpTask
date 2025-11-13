@@ -1,5 +1,5 @@
 import streamlit as st
-import anthropic
+import requests
 import os
 from templates import get_general_template, get_code_template, get_criterios_Aceptacion_template, get_criterios_epica_template, get_criterios_mejora_template, get_spike_template, get_historia_epica_template, get_resumen_reunion_template, get_criterios_epica_only_history_template
 
@@ -9,8 +9,8 @@ st.set_page_config(page_title="Softtek Prompts IA", page_icon="🔗")
 # Sidebar para la clave API y selección de modelo
 st.sidebar.title("Configuración")
 #api_key = st.sidebar.text_input("🔑 Clave API de Anthropic", type="password")
-api_user = os.getenv("IA_User")
-api_pass = os.getenv("IA_Pass")
+bearer_token = os.getenv("IA_User")
+# api_pass = os.getenv("IA_Pass")
 api_url = os.getenv("IA_URL")
 
 def generate_response(template_type="PO Casos exito"):
@@ -46,7 +46,7 @@ model = st.sidebar.selectbox(
 
   # Perimetros de generacion
 temperatura = st.sidebar.slider("Temperatura", min_value=0.0, max_value=1.0, value=0.7, step=0.1)
-max_tokens = st.sidebar.slider("Maximo de tokens", min_value=100, max_value=4096, value=2000, step=100)
+max_tokens = st.sidebar.slider("Maximo de tokens", min_value=100, max_value=4096, value=1500, step=100)
 
 # Selecci贸n de template
 template_seleccionado = st.sidebar.selectbox(
@@ -79,25 +79,31 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    if not api_url:
-        st.error("⚠️ URL incorrecta. Debes ingresar tu URL API.")
+    if not api_url or not bearer_token:
+        st.error("⚠️ Configura IA_URL y IA_TOKEN en tu entorno.")
     else:
         try:
-            client = anthropic.Anthropic(api_key=api_key)
-
             # Enviar conversación completa
-            with st.spinner("Claude está pensando..."):
-                response = client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperatura,
-                    messages=[
-                        {"role": m["role"], "content": m["content_final"]} for m in st.session_state.messages
-                    ]
-                )
+            with st.spinner("La IA está pensando..."):
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {bearer_token}"
+                }
+                payload = {
+                    "model": model,
+                    "messages": [{"role": m["role"], "content": m["content_final"]} for m in st.session_state.messages],
+                    "stream": False,
+                    "max_tokens": max_tokens,
+                    "temperature": temperatura,
+                    "user": "user_id"
+                }
 
-            # Obtener respuesta
-            answer = response.content[0].text
+                response = requests.post(api_url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+
+                # Extraer respuesta del JSON
+                answer = data.get("choices", [{}])[0].get("message", {}).get("content", "No se recibió respuesta.")
 
             # Mostrar respuesta
             with st.chat_message("assistant"):
