@@ -58,7 +58,8 @@ template_seleccionado = st.sidebar.selectbox(
 
 # Mostrar contenido del template seleccionado en caja no editable
 template_preview = generate_response(template_seleccionado)
-st.sidebar.text_area("Contenido del template", template_preview, height=200, disabled=True)
+#st.sidebar.text_area("Contenido del template", template_preview, height=200, disabled=False)
+edited_template = st.sidebar.text_area("Contenido del template:", template_preview, height=200)
 
 # Inicializar historial de mensajes si no existe
 if "messages" not in st.session_state:
@@ -72,11 +73,21 @@ for msg in st.session_state.messages:
         st.markdown(msg["content_final"])
 
 # Formatear el prompt seg煤n el template seleccionado la primera vez
-prompt_template = generate_response(template_seleccionado)
+prompt_template = edited_template #generate_response(template_seleccionado)
 primeraVez = True
 
+# Botón para reiniciar chat
+col1, col2 = st.columns([1, 4])
+with col1:
+    if st.button("🆕 Nuevo chat"):
+        st.session_state.messages = []
+        st.experimental_rerun()  # Recarga la app
+
+with col2:
+    prompt = st.chat_input("Escribe tu mensaje...")
+
 # Entrada del usuario
-if prompt := st.chat_input("Escribe tu mensaje..."):
+if prompt :
 
     if primeraVez: 
         # Reemplazar variables en el template
