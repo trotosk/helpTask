@@ -4,17 +4,19 @@ import os
 from templates import get_general_template, get_code_template, get_criterios_Aceptacion_template, get_criterios_epica_template, get_criterios_mejora_template, get_spike_template, get_historia_epica_template, get_resumen_reunion_template, get_criterios_epica_only_history_template
 
 # Configurar la página
-st.set_page_config(page_title="AyudaPO", page_icon="🔗")
+st.set_page_config(page_title="Softtek Prompts IA", page_icon="🔗")
 
 # Sidebar para la clave API y selección de modelo
 st.sidebar.title("Configuración")
 #api_key = st.sidebar.text_input("🔑 Clave API de Anthropic", type="password")
-api_key = os.getenv("ANTHROPIC_API_KEY")
+api_user = os.getenv("IA_User")
+api_pass = os.getenv("IA_Pass")
+api_url = os.getenv("IA_URL")
 
 def generate_response(template_type="PO Casos exito"):
 # Definir templates para diferentes casos de uso
 # Seleccion de template
-    if template_seleccionado == "General":
+    if template_seleccionado == "Libre":
         template = get_general_template()
     elif template_seleccionado == "PO Casos exito":
         template = get_criterios_Aceptacion_template()
@@ -37,9 +39,9 @@ def generate_response(template_type="PO Casos exito"):
 
 
 model = st.sidebar.selectbox(
-    "🤖 Modelo Claude",
-    options=["claude-3-7-sonnet-20250219", "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
-    index=0  # por defecto: Sonnet
+    "🤖 Modelo IA",
+    options=["Innovation-gpt4o-mini", "Innovation-gpt4o", "o4-mini", "o1", "o1-mini", "o3-mini", "o1-preview", "gpt-5-chat", "gpt-4.1", "gpt-4.1-mini", "gpt-5", "gpt-5-codex", "gpt-5-mini", "gpt-5-nano", "gpt-4.1-nano", "claude-3-5-sonnet", "claude-4-sonnet", "claude-3-7-sonnet", "claude-3-5-haiku", "claude-4-5-sonnet"],
+    index=0  # por defecto: el primero
 )
 
   # Perimetros de generacion
@@ -48,8 +50,8 @@ max_tokens = st.sidebar.slider("Maximo de tokens", min_value=100, max_value=4096
 
 # Selecci贸n de template
 template_seleccionado = st.sidebar.selectbox(
-    "Tipo de consulta",
-    options=["General", "PO Casos exito", "PO Definicion epica", "PO Definicion epica una historia", "PO Definicion historia", "PO Definicion mejora tecnica", "PO Definicion spike", "PO resumen reunion", "Programador Python"],
+    "Tipo de prompts",
+    options=["Libre", "PO Casos exito", "PO Definicion epica", "PO Definicion epica una historia", "PO Definicion historia", "PO Definicion mejora tecnica", "PO Definicion spike", "PO resumen reunion", "Programador Python"],
     index=0  # por defecto: General
 )
 
@@ -58,7 +60,7 @@ template_seleccionado = st.sidebar.selectbox(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-st.title("💬 Chat AyudaPO")
+st.title("💬 Chat Softtek Prompts IA")
 
 # Mostrar historial de chat
 for msg in st.session_state.messages:
@@ -77,8 +79,8 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    if not api_key:
-        st.error("⚠️ Clave incorrecta. Debes ingresar tu clave API.")
+    if not api_url:
+        st.error("⚠️ URL incorrecta. Debes ingresar tu URL API.")
     else:
         try:
             client = anthropic.Anthropic(api_key=api_key)
