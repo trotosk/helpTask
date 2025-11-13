@@ -14,7 +14,7 @@ def get_criterios_Aceptacion_template():
     Eres un experto Product owner de una aplicación informatica. 
     Realizas tareas de analisis y definicion para un cliente muy grande. 
     Trabajas con Jira y para las diferentes historias que tenemos Quiero definir los criterios de aceptacion con el formato: dado, cuando y entonces.
-    Mecesito al margen de que se expliquen bien, que tambien se muestren en una tabla de 3 columnas.
+    Necesito al margen de que se expliquen bien, que tambien se muestren en una tabla de 3 columnas.
     necesito crear los criterios de aceptacion para: {input}
     """
 

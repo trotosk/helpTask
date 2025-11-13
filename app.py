@@ -8,10 +8,8 @@ st.set_page_config(page_title="Softtek Prompts IA", page_icon="🔗")
 
 # Sidebar para la clave API y selección de modelo
 st.sidebar.title("Configuración")
-#api_key = st.sidebar.text_input("🔑 Clave API de Anthropic", type="password")
-bearer_token = os.getenv("IA_User")
+bearer_token = os.getenv("IA_TOKEN")
 resource_api_ask = os.getenv("IA_RESOURCE_CONSULTA")
-# api_pass = os.getenv("IA_Pass")
 api_url = os.getenv("IA_URL")
 
 def generate_response(template_type="PO Casos exito"):
@@ -46,7 +44,9 @@ model = st.sidebar.selectbox(
 )
 
   # Perimetros de generacion
+include_temp = st.sidebar.checkbox("Incluir temperatura", value=True)
 temperatura = st.sidebar.slider("Temperatura", min_value=0.0, max_value=1.0, value=0.7, step=0.1)
+include_tokens = st.sidebar.checkbox("Incluir max_tokens", value=True)
 max_tokens = st.sidebar.slider("Maximo de tokens", min_value=100, max_value=4096, value=1500, step=100)
 
 # Selecci贸n de template
@@ -56,6 +56,9 @@ template_seleccionado = st.sidebar.selectbox(
     index=0  # por defecto: General
 )
 
+# Mostrar contenido del template seleccionado en caja no editable
+template_preview = generate_response(template_seleccionado)
+st.sidebar.text_area("Contenido del template", template_preview, height=200, disabled=True)
 
 # Inicializar historial de mensajes si no existe
 if "messages" not in st.session_state:
@@ -94,13 +97,25 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
                     "model": model,
                     "messages": [{"role": m["role"], "content": m["content_final"]} for m in st.session_state.messages],
                     "stream": False,
-                    "max_tokens": max_tokens,
-                    "temperature": temperatura,
                     "user": "user_id"
                 }
 
+                # Añadir parámetros opcionales
+                if include_temp:
+                    payload["temperature"] = temperatura
+                if include_tokens:
+                    payload["max_tokens"] = max_tokens
+
+                # Logs en consola
+                print("=== Payload listo para envio ===")
+                print(payload)
+
                 api_url_final = api_url + resource_api_ask
                 response = requests.post(api_url_final, json=payload, headers=headers)
+
+                print("=== Status Code ===", response.status_code)
+                print("=== Respuesta completa ===", response.text)
+
                 response.raise_for_status()
                 data = response.json()
 
@@ -116,5 +131,6 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
 
         except Exception as e:
             st.error(f"❌ Error al llamar a la API: {e}")
+            print("=== Error ===", e)
 
 
