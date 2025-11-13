@@ -3,6 +3,10 @@ import requests
 import os
 from templates import get_general_template, get_code_template, get_criterios_Aceptacion_template, get_criterios_epica_template, get_criterios_mejora_template, get_spike_template, get_historia_epica_template, get_resumen_reunion_template, get_criterios_epica_only_history_template
 
+#Botón en sidebar
+if st.sidebar.button("🧹 Nuevo Chat"):
+    st.session_state.messages = []
+    
 # Configurar la página
 st.set_page_config(page_title="Softtek Prompts IA", page_icon="🔗")
 
@@ -72,11 +76,6 @@ st.title("💬 Chat Softtek Prompts IA")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content_final"])
-
-
-#Botón en sidebar
-if st.sidebar.button("🧹 Nuevo Chat"):
-    st.session_state.messages = []
 
 
 
