@@ -51,7 +51,7 @@ max_tokens = st.sidebar.slider("Maximo de tokens", min_value=100, max_value=4096
 
 # Selecci贸n de template
 template_seleccionado = st.sidebar.selectbox(
-    "Tipo de prompts",
+    "Tipo de prompts inicio",
     options=["Libre", "PO Casos exito", "PO Definicion epica", "PO Definicion epica una historia", "PO Definicion historia", "PO Definicion mejora tecnica", "PO Definicion spike", "PO resumen reunion", "Programador Python"],
     index=0  # por defecto: General
 )
@@ -71,13 +71,20 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+# Formatear el prompt seg煤n el template seleccionado la primera vez
+prompt_template = generate_response(template_seleccionado)
+primeraVez = True
+
 # Entrada del usuario
 if prompt := st.chat_input("Escribe tu mensaje..."):
-    # Formatear el prompt seg煤n el template seleccionado
-    prompt_template = generate_response(template_seleccionado)
-    
-    # Reemplazar variables en el template
-    prompt_final = prompt_template.format(input=prompt)
+
+    if primeraVez: 
+        # Reemplazar variables en el template
+        prompt_final = prompt_template.format(input=prompt)
+    else:
+        # No hay que reemplazar nada y se asigna directamente tal cual.
+        prompt_final = prompt
+
     # Mostrar mensaje del usuario
     st.session_state.messages.append({"role": "user", "content": prompt, "content_final": prompt_final})
     with st.chat_message("user"):
@@ -127,7 +134,7 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
                 st.markdown(answer)
 
             # Guardar en historial
-            st.session_state.messages.append({"role": "assistant", "content": answer, "content_final": prompt_final})
+            st.session_state.messages.append({"role": "assistant", "content": data.get("choices", [{}])[0], "content_final": answer})
 
         except Exception as e:
             st.error(f"❌ Error al llamar a la API: {e}")
