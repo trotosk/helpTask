@@ -69,7 +69,7 @@ st.title("💬 Chat Softtek Prompts IA")
 # Mostrar historial de chat
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        st.markdown(msg["content_final"])
 
 # Formatear el prompt seg煤n el template seleccionado la primera vez
 prompt_template = generate_response(template_seleccionado)
