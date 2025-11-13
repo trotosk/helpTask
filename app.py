@@ -10,6 +10,7 @@ st.set_page_config(page_title="Softtek Prompts IA", page_icon="🔗")
 st.sidebar.title("Configuración")
 #api_key = st.sidebar.text_input("🔑 Clave API de Anthropic", type="password")
 bearer_token = os.getenv("IA_User")
+resource_api_ask = os.getenv("IA_RESOURCE_CONSULTA")
 # api_pass = os.getenv("IA_Pass")
 api_url = os.getenv("IA_URL")
 
@@ -79,7 +80,7 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    if not api_url or not bearer_token:
+    if not api_url or not bearer_token or not resource_api_ask:
         st.error("⚠️ Configura IA_URL y IA_TOKEN en tu entorno.")
     else:
         try:
@@ -98,7 +99,8 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
                     "user": "user_id"
                 }
 
-                response = requests.post(api_url, json=payload, headers=headers)
+                api_url_final = api_url + resource_api_ask
+                response = requests.post(api_url_final, json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
 
