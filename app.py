@@ -81,6 +81,7 @@ if prompt := st.chat_input("Escribe tu mensaje..."):
     if primeraVez: 
         # Reemplazar variables en el template
         prompt_final = prompt_template.format(input=prompt)
+        primeraVez = False
     else:
         # No hay que reemplazar nada y se asigna directamente tal cual.
         prompt_final = prompt
