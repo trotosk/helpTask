@@ -138,8 +138,7 @@ def build_repo_tree(base_path):
                 node[f] = "FILE"
     return tree
 
-def analizar_archivo(filepath):
-    """Analiza un archivo grande por chunks y actualiza cache y memoria resumida."""
+def analizar_archivo(filepath, progress_bar=None, current_count=None, total_files=None):
     if filepath in st.session_state.analysis_cache:
         return st.session_state.analysis_cache[filepath]
 
@@ -166,21 +165,30 @@ def analizar_archivo(filepath):
 
     st.session_state.analysis_cache[filepath] = analysis_full
 
-    # Actualizar memoria resumida cada archivo
+    # Actualizar memoria resumida cada 10 fragmentos
     if len(st.session_state.repo_messages) > 10:
         st.session_state.repo_memory_summary = resumir_conversacion(st.session_state.repo_messages[-10:])
         st.session_state.repo_messages = st.session_state.repo_messages[-10:]
+
+    # Actualizar barra de progreso si se pasa
+    if progress_bar and current_count is not None and total_files:
+        progress_bar.progress(current_count / total_files)
 
     return analysis_full
 
 def analizar_todo_repositorio(base_path):
     st.info("Analizando todos los archivos del repositorio... esto puede tardar")
     CODE_EXTENSIONS = (".py", ".js", ".ts", ".java", ".go", ".cs", ".rb", ".php")
+    files_to_analyze = []
     for root, dirs, files in os.walk(base_path):
         for file in files:
             if file.endswith(CODE_EXTENSIONS):
-                filepath = os.path.join(root, file)
-                analizar_archivo(filepath)
+                files_to_analyze.append(os.path.join(root, file))
+
+    progress_bar = st.progress(0)
+    total_files = len(files_to_analyze)
+    for idx, filepath in enumerate(files_to_analyze, start=1):
+        analizar_archivo(filepath, progress_bar=progress_bar, current_count=idx, total_files=total_files)
     st.success("✅ Análisis completo realizado. Ahora puedes preguntar sobre el repositorio.")
 
 def build_repo_context():
@@ -261,8 +269,16 @@ with tab_repo:
         st.session_state.repo_tmpdir = tmp
         st.session_state.repo_tree = build_repo_tree(tmp.name)
 
-        # Analizar todo automáticamente al subir el ZIP
-        analizar_todo_repositorio(tmp.name)
+        # Botón para re-analizar con nuevo modelo/configuración
+        if st.button("🔄 Analizar repositorio de nuevo"):
+            st.session_state.repo_messages = []
+            st.session_state.repo_memory_summary = ""
+            st.session_state.analysis_cache = {}
+            analizar_todo_repositorio(tmp.name)
+        else:
+            # Analizar automáticamente la primera vez
+            if not st.session_state.repo_memory_summary:
+                analizar_todo_repositorio(tmp.name)
 
     col1, col2 = st.columns([1,2])
 
