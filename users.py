@@ -1,5 +1,5 @@
 # users.py
 USERS = {
-    "antonio.alcaraz@softtek.com": "Albacete_0126",
+    "antonio.alcaraz@softtek.com": "123456",
     "tester@softtek.com": "123456"
 }
