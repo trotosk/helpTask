@@ -5,6 +5,37 @@ import zipfile
 import tempfile
 from pathlib import Path
 
+# ==================================================
+# USUARIOS FIJOS
+# ==================================================
+USERS = {
+    "juan@empresa.com": "password123",
+    "ana@empresa.com": "claveSegura",
+    "otro@empresa.com": "1234abcd"
+}
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user_email = ""
+
+# PANTALLA DE LOGIN
+if not st.session_state.logged_in:
+    st.title("🔒 Iniciar sesión")
+    email = st.text_input("Correo")
+    password = st.text_input("Contraseña", type="password")
+    if st.button("Entrar"):
+        if email in USERS and USERS[email] == password:
+            st.session_state.logged_in = True
+            st.session_state.user_email = email
+            st.success(f"Bienvenido {email}!")
+            st.rerun()  # recarga la app
+        else:
+            st.error("Correo o contraseña incorrectos")
+    st.stop()  # bloquea la app hasta login
+
+# ==================================================
+# IMPORTS DE TEMPLATES Y CONFIG
+# ==================================================
 from templates import (
     get_general_template,
     get_code_template,
@@ -17,9 +48,6 @@ from templates import (
     get_criterios_epica_only_history_template
 )
 
-# ==================================================
-# CONFIGURACIÓN
-# ==================================================
 st.set_page_config(
     page_title="Softtek Prompts IA",
     page_icon="🧠",
@@ -131,9 +159,6 @@ def analizar_archivo(filepath):
     return analysis
 
 def build_repo_context():
-    """
-    Devuelve el contexto resumido para el copiloto de repositorio
-    """
     if st.session_state.repo_memory_summary:
         return [{"role":"system","content":st.session_state.repo_memory_summary}]
     return []
@@ -220,7 +245,6 @@ with tab_repo:
                     path = os.path.join(base, rel, k)
                     analysis = analizar_archivo(path)
                     st.session_state.repo_messages.append({"role":"assistant","content":analysis})
-                    # Generar resumen automático si hay muchas entradas
                     if len(st.session_state.repo_messages) > 10:
                         st.session_state.repo_memory_summary = resumir_conversacion(st.session_state.repo_messages[:-4])
                         st.session_state.repo_messages = st.session_state.repo_messages[-4:]
