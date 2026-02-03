@@ -1,200 +1,240 @@
 import streamlit as st
 import requests
 import os
-from templates import (
-    get_general_template,
-    get_code_template,
-    get_criterios_Aceptacion_template,
-    get_criterios_epica_template,
-    get_criterios_mejora_template,
-    get_spike_template,
-    get_historia_epica_template,
-    get_resumen_reunion_template,
-    get_criterios_epica_only_history_template
+import zipfile
+import tempfile
+from pathlib import Path
+
+# =====================
+# CONFIG
+# =====================
+st.set_page_config(
+    page_title="Softtek IA – Repo Copilot",
+    page_icon="🧠",
+    layout="wide"
 )
 
-# =========================
-# CONFIGURACIÓN DE PÁGINA
-# =========================
-st.set_page_config(page_title="Softtek Prompts IA", page_icon="🔗", layout="wide")
+API_URL = os.getenv("IA_URL")
+API_RESOURCE = os.getenv("IA_RESOURCE_CONSULTA")
+TOKEN = os.getenv("IA_TOKEN")
 
-# =========================
-# ESTADO INICIAL
-# =========================
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+MODEL_DEFAULT = "gpt-5"
+MAX_MESSAGES = 12
 
-if "uploaded_files_content" not in st.session_state:
-    st.session_state.uploaded_files_content = ""
+IGNORED_DIRS = [
+    ".git", "node_modules", "venv", "__pycache__",
+    "dist", "build", ".idea", ".vscode"
+]
 
-# =========================
-# SIDEBAR
-# =========================
-st.sidebar.title("Configuración")
+CODE_EXTENSIONS = (".py", ".js", ".ts", ".java", ".go", ".cs")
+
+# =====================
+# STATE
+# =====================
+for key, default in {
+    "messages": [],
+    "memory_summary": "",
+    "repo_tree": {},
+    "repo_path": None,
+    "analysis_cache": {}
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+# =====================
+# HELPERS IA
+# =====================
+def call_ia(messages, temperature=0.2):
+    payload = {
+        "model": MODEL_DEFAULT,
+        "messages": messages,
+        "temperature": temperature
+    }
+    headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Content-Type": "application/json"
+    }
+    r = requests.post(
+        API_URL + API_RESOURCE,
+        json=payload,
+        headers=headers,
+        timeout=120
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"]
+
+# =====================
+# MEMORIA RESUMIDA (REAL)
+# =====================
+def resumir_conversacion(messages):
+    prompt = [
+        {
+            "role": "system",
+            "content": (
+                "Resume la conversación técnica manteniendo:\n"
+                "- Objetivo del usuario\n"
+                "- Decisiones técnicas\n"
+                "- Qué partes del repositorio se han analizado\n"
+                "- Qué queda pendiente\n"
+                "Resumen conciso y técnico."
+            )
+        },
+        {
+            "role": "user",
+            "content": "\n".join(
+                f"{m['role']}: {m['content']}"
+                for m in messages
+            )
+        }
+    ]
+    return call_ia(prompt)
+
+# =====================
+# ZIP + INDEXADO
+# =====================
+def build_repo_tree(base_path):
+    tree = {}
+
+    for root, dirs, files in os.walk(base_path):
+        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+
+        rel = os.path.relpath(root, base_path)
+        node = tree
+        if rel != ".":
+            for part in rel.split(os.sep):
+                node = node.setdefault(part, {})
+
+        for f in files:
+            if f.endswith(CODE_EXTENSIONS):
+                node[f] = "FILE"
+
+    return tree
+
+def extract_zip(uploaded_zip):
+    tmp = tempfile.TemporaryDirectory()
+    zip_path = Path(tmp.name) / uploaded_zip.name
+
+    with open(zip_path, "wb") as f:
+        f.write(uploaded_zip.read())
+
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall(tmp.name)
+
+    return tmp
+
+# =====================
+# UI SIDEBAR
+# =====================
+st.sidebar.title("🧠 Configuración")
 
 if st.sidebar.button("🧹 Nuevo Chat"):
-    st.session_state.messages = []
-    st.session_state.uploaded_files_content = ""
-
-bearer_token = os.getenv("IA_TOKEN")
-resource_api_ask = os.getenv("IA_RESOURCE_CONSULTA")
-api_url = os.getenv("IA_URL")
+    for k in st.session_state.keys():
+        st.session_state[k] = [] if isinstance(st.session_state[k], list) else {}
 
 model = st.sidebar.selectbox(
-    "🤖 Modelo IA",
-    options=[
-        "Innovation-gpt4o-mini", "Innovation-gpt4o", "o4-mini", "o1",
-        "o1-mini", "o3-mini", "o1-preview", "gpt-5-chat", "gpt-4.1",
-        "gpt-4.1-mini", "gpt-5", "gpt-5-codex", "gpt-5-mini",
-        "gpt-5-nano", "gpt-4.1-nano",
-        "claude-3-5-sonnet", "claude-4-sonnet",
-        "claude-3-7-sonnet", "claude-3-5-haiku", "claude-4-5-sonnet"
-    ],
+    "Modelo IA",
+    ["gpt-5", "gpt-5-mini", "claude-4-sonnet"],
     index=0
 )
+MODEL_DEFAULT = model
 
-include_temp = st.sidebar.checkbox("Incluir temperatura", value=True)
-temperatura = st.sidebar.slider("Temperatura", 0.0, 1.0, 0.7, 0.1)
-
-include_tokens = st.sidebar.checkbox("Incluir max_tokens", value=True)
-max_tokens = st.sidebar.slider("Max tokens", 100, 4096, 1500, 100)
-
-template_seleccionado = st.sidebar.selectbox(
-    "Tipo de prompt inicial",
-    options=[
-        "Libre", "PO Casos exito", "PO Definicion epica",
-        "PO Definicion epica una historia", "PO Definicion historia",
-        "PO Definicion mejora tecnica", "PO Definicion spike",
-        "PO resumen reunion", "Programador Python"
-    ],
-    index=0
+uploaded_zip = st.sidebar.file_uploader(
+    "📦 Subir repositorio (.zip)",
+    type=["zip"]
 )
 
-def get_template(tipo):
-    return {
-        "Libre": get_general_template(),
-        "PO Casos exito": get_criterios_Aceptacion_template(),
-        "Programador Python": get_code_template(),
-        "PO Definicion epica": get_criterios_epica_template(),
-        "PO Definicion epica una historia": get_criterios_epica_only_history_template(),
-        "PO Definicion mejora tecnica": get_criterios_mejora_template(),
-        "PO Definicion spike": get_spike_template(),
-        "PO Definicion historia": get_historia_epica_template(),
-        "PO resumen reunion": get_resumen_reunion_template()
-    }.get(tipo, get_general_template())
+if uploaded_zip:
+    with st.spinner("Procesando repositorio..."):
+        tmp = extract_zip(uploaded_zip)
+        st.session_state.repo_path = tmp
+        st.session_state.repo_tree = build_repo_tree(tmp.name)
+    st.sidebar.success("Repositorio listo")
 
-template_preview = get_template(template_seleccionado)
-prompt_template = st.sidebar.text_area(
-    "Contenido del template:",
-    template_preview,
-    height=220
-)
+# =====================
+# UX EXPLORADOR
+# =====================
+st.title("🧠 IA Copilot sobre Repositorio")
 
-# =========================
-# SUBIDA DE FICHEROS
-# =========================
-st.sidebar.markdown("### 📎 Adjuntar ficheros")
-uploaded_files = st.sidebar.file_uploader(
-    "Puedes subir txt, md, json, csv",
-    type=["txt", "md", "json", "csv"],
-    accept_multiple_files=True
-)
+col1, col2 = st.columns([1, 2])
 
-if uploaded_files:
-    contents = []
-    for file in uploaded_files:
-        try:
-            content = file.read().decode("utf-8")
-            contents.append(f"### Archivo: {file.name}\n{content}")
-        except Exception:
-            contents.append(f"### Archivo: {file.name}\n(No se pudo leer el contenido)")
-    st.session_state.uploaded_files_content = "\n\n".join(contents)
+def render_tree(tree, path=""):
+    for k, v in tree.items():
+        if v == "FILE":
+            if st.button(f"📄 {path}{k}", key=path+k):
+                analizar_archivo(os.path.join(st.session_state.repo_path.name, path, k))
+        else:
+            with st.expander(f"📁 {path}{k}"):
+                render_tree(v, path + k + "/")
 
-# =========================
-# UI PRINCIPAL
-# =========================
-st.title("💬 Chat Softtek Prompts IA")
+def analizar_archivo(filepath):
+    if filepath in st.session_state.analysis_cache:
+        st.info("Usando análisis en caché")
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": st.session_state.analysis_cache[filepath]
+        })
+        return
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content_final"])
+    with open(filepath, encoding="utf-8", errors="ignore") as f:
+        code = f.read()
 
-# =========================
-# INPUT DE CHAT
-# =========================
-if prompt := st.chat_input("Escribe tu mensaje..."):
+    prompt = [
+        {
+            "role": "system",
+            "content": "Analiza este archivo de código. Explica responsabilidades y dependencias."
+        },
+        {
+            "role": "user",
+            "content": code[:12000]
+        }
+    ]
 
-    if not st.session_state.messages:
-        prompt_final = prompt_template.format(input=prompt)
-    else:
-        prompt_final = prompt
-
-    # Adjuntar ficheros si existen
-    if st.session_state.uploaded_files_content:
-        prompt_final += (
-            "\n\n---\n"
-            "Contexto adicional proporcionado en archivos:\n"
-            f"{st.session_state.uploaded_files_content}"
-        )
+    analysis = call_ia(prompt)
+    st.session_state.analysis_cache[filepath] = analysis
 
     st.session_state.messages.append({
-        "role": "user",
-        "content": prompt,
-        "content_final": prompt_final
+        "role": "assistant",
+        "content": analysis
     })
 
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    if not api_url or not bearer_token or not resource_api_ask:
-        st.error("⚠️ Faltan variables de entorno IA_URL, IA_TOKEN o IA_RESOURCE_CONSULTA")
+with col1:
+    st.subheader("📂 Repositorio")
+    if st.session_state.repo_tree:
+        render_tree(st.session_state.repo_tree)
     else:
-        try:
-            with st.spinner("La IA está pensando..."):
-                payload = {
-                    "model": model,
-                    "messages": [
-                        {"role": m["role"], "content": m["content_final"]}
-                        for m in st.session_state.messages
-                    ],
-                    "stream": False
-                }
+        st.info("Sube un ZIP para empezar")
 
-                if include_temp:
-                    payload["temperature"] = temperatura
-                if include_tokens:
-                    payload["max_tokens"] = max_tokens
+with col2:
+    st.subheader("💬 Chat técnico")
 
-                headers = {
-                    "Authorization": f"Bearer {bearer_token}",
-                    "Content-Type": "application/json"
-                }
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
 
-                response = requests.post(
-                    api_url + resource_api_ask,
-                    json=payload,
-                    headers=headers,
-                    timeout=60
-                )
+    if prompt := st.chat_input("Pregunta sobre el repositorio..."):
 
-                response.raise_for_status()
-                data = response.json()
+        if len(st.session_state.messages) > MAX_MESSAGES:
+            st.session_state.memory_summary = resumir_conversacion(
+                st.session_state.messages[:-4]
+            )
+            st.session_state.messages = st.session_state.messages[-4:]
 
-                answer = (
-                    data.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "No se recibió respuesta.")
-                )
+        context = ""
+        if st.session_state.memory_summary:
+            context += f"MEMORIA:\n{st.session_state.memory_summary}\n\n"
 
-            with st.chat_message("assistant"):
-                st.markdown(answer)
+        prompt_final = context + prompt
 
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": answer,
-                "content_final": answer
-            })
+        st.session_state.messages.append({
+            "role": "user",
+            "content": prompt
+        })
 
-        except requests.exceptions.RequestException as e:
-            st.error("❌ Error de comunicación con la IA")
-            st.exception(e)
+        response = call_ia([
+            {"role": "system", "content": prompt_final}
+        ])
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response
+        })
