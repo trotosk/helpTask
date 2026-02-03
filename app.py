@@ -27,10 +27,10 @@ if not st.session_state.logged_in:
             st.session_state.logged_in = True
             st.session_state.user_email = email
             st.success(f"Bienvenido {email}!")
-            st.rerun()  # recarga la app
+            st.rerun()
         else:
             st.error("Correo o contraseña incorrectos")
-    st.stop()  # bloquea la app hasta login
+    st.stop()
 
 # ==================================================
 # IMPORTS DE TEMPLATES Y CONFIG
@@ -169,10 +169,19 @@ def analizar_archivo(filepath):
     # Actualizar memoria resumida cada archivo
     if len(st.session_state.repo_messages) > 10:
         st.session_state.repo_memory_summary = resumir_conversacion(st.session_state.repo_messages[-10:])
-        # Opcional: limpiar mensajes antiguos
         st.session_state.repo_messages = st.session_state.repo_messages[-10:]
 
     return analysis_full
+
+def analizar_todo_repositorio(base_path):
+    st.info("Analizando todos los archivos del repositorio... esto puede tardar")
+    CODE_EXTENSIONS = (".py", ".js", ".ts", ".java", ".go", ".cs", ".rb", ".php")
+    for root, dirs, files in os.walk(base_path):
+        for file in files:
+            if file.endswith(CODE_EXTENSIONS):
+                filepath = os.path.join(root, file)
+                analizar_archivo(filepath)
+    st.success("✅ Análisis completo realizado. Ahora puedes preguntar sobre el repositorio.")
 
 def build_repo_context():
     if st.session_state.repo_memory_summary:
@@ -252,14 +261,15 @@ with tab_repo:
         st.session_state.repo_tmpdir = tmp
         st.session_state.repo_tree = build_repo_tree(tmp.name)
 
+        # Analizar todo automáticamente al subir el ZIP
+        analizar_todo_repositorio(tmp.name)
+
     col1, col2 = st.columns([1,2])
 
     def render_tree(tree, base, rel=""):
         for k,v in tree.items():
             if v=="FILE":
-                if st.button(f"📄 {rel}{k}", key=rel+k):
-                    path = os.path.join(base, rel, k)
-                    analizar_archivo(path)  # análisis con chunks y memoria resumida
+                st.text(f"📄 {rel}{k}")  # solo mostrar nombre de archivo
             else:
                 with st.expander(f"📁 {rel}{k}"):
                     render_tree(v, base, rel+ k + "/")
@@ -288,4 +298,3 @@ with tab_repo:
             st.session_state.repo_messages.append({"role":"user","content":repo_prompt})
             st.session_state.repo_messages.append({"role":"assistant","content":answer})
             st.rerun()
-
