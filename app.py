@@ -9,9 +9,8 @@ from pathlib import Path
 # USUARIOS FIJOS
 # ==================================================
 USERS = {
-    "juan@empresa.com": "password123",
-    "ana@empresa.com": "claveSegura",
-    "otro@empresa.com": "1234abcd"
+    "antonio.alcaraz@softtek.com": "123456",
+    "tester@softtek.com": "123456"
 }
 
 if "logged_in" not in st.session_state:
@@ -289,3 +288,4 @@ with tab_repo:
             st.session_state.repo_messages.append({"role":"user","content":repo_prompt})
             st.session_state.repo_messages.append({"role":"assistant","content":answer})
             st.rerun()
+
