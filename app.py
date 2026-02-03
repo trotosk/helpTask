@@ -5,11 +5,23 @@ import zipfile
 import tempfile
 from pathlib import Path
 
-# =====================
-# CONFIG
-# =====================
+from templates import (
+    get_general_template,
+    get_code_template,
+    get_criterios_Aceptacion_template,
+    get_criterios_epica_template,
+    get_criterios_mejora_template,
+    get_spike_template,
+    get_historia_epica_template,
+    get_resumen_reunion_template,
+    get_criterios_epica_only_history_template
+)
+
+# ==================================================
+# CONFIGURACIÓN
+# ==================================================
 st.set_page_config(
-    page_title="Softtek IA – Repo Copilot",
+    page_title="Softtek Prompts IA",
     page_icon="🧠",
     layout="wide"
 )
@@ -18,38 +30,26 @@ API_URL = os.getenv("IA_URL")
 API_RESOURCE = os.getenv("IA_RESOURCE_CONSULTA")
 TOKEN = os.getenv("IA_TOKEN")
 
-MODEL_DEFAULT = "gpt-5"
-MAX_MESSAGES = 12
-
-IGNORED_DIRS = [
-    ".git", "node_modules", "venv", "__pycache__",
-    "dist", "build", ".idea", ".vscode"
-]
-
-CODE_EXTENSIONS = (".py", ".js", ".ts", ".java", ".go", ".cs")
-
-# =====================
-# STATE
-# =====================
-for key, default in {
+# ==================================================
+# ESTADO INICIAL
+# ==================================================
+defaults = {
     "messages": [],
+    "repo_messages": [],
     "memory_summary": "",
     "repo_tree": {},
-    "repo_path": None,
+    "repo_tmpdir": None,
     "analysis_cache": {}
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
+}
 
-# =====================
-# HELPERS IA
-# =====================
-def call_ia(messages, temperature=0.2):
-    payload = {
-        "model": MODEL_DEFAULT,
-        "messages": messages,
-        "temperature": temperature
-    }
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ==================================================
+# HELPERS
+# ==================================================
+def call_ia(payload):
     headers = {
         "Authorization": f"Bearer {TOKEN}",
         "Content-Type": "application/json"
@@ -63,178 +63,176 @@ def call_ia(messages, temperature=0.2):
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
-# =====================
-# MEMORIA RESUMIDA (REAL)
-# =====================
-def resumir_conversacion(messages):
-    prompt = [
-        {
-            "role": "system",
-            "content": (
-                "Resume la conversación técnica manteniendo:\n"
-                "- Objetivo del usuario\n"
-                "- Decisiones técnicas\n"
-                "- Qué partes del repositorio se han analizado\n"
-                "- Qué queda pendiente\n"
-                "Resumen conciso y técnico."
-            )
-        },
-        {
-            "role": "user",
-            "content": "\n".join(
-                f"{m['role']}: {m['content']}"
-                for m in messages
-            )
-        }
-    ]
-    return call_ia(prompt)
+def get_template(tipo):
+    return {
+        "Libre": get_general_template(),
+        "PO Casos exito": get_criterios_Aceptacion_template(),
+        "Programador Python": get_code_template(),
+        "PO Definicion epica": get_criterios_epica_template(),
+        "PO Definicion epica una historia": get_criterios_epica_only_history_template(),
+        "PO Definicion mejora tecnica": get_criterios_mejora_template(),
+        "PO Definicion spike": get_spike_template(),
+        "PO Definicion historia": get_historia_epica_template(),
+        "PO resumen reunion": get_resumen_reunion_template()
+    }.get(tipo, get_general_template())
 
-# =====================
-# ZIP + INDEXADO
-# =====================
+def resumir_conversacion(messages):
+    resumen_prompt = [
+        {"role": "system", "content": "Resume la conversación técnica manteniendo contexto y decisiones"},
+        {"role": "user", "content": "\n".join(f"{m['role']}: {m['content']}" for m in messages)}
+    ]
+    return call_ia({"model": st.session_state.model, "messages": resumen_prompt})
+
+def extract_zip(uploaded_zip):
+    tmp = tempfile.TemporaryDirectory()
+    zip_path = Path(tmp.name) / uploaded_zip.name
+    with open(zip_path, "wb") as f:
+        f.write(uploaded_zip.read())
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall(tmp.name)
+    return tmp
+
 def build_repo_tree(base_path):
     tree = {}
-
+    IGNORED_DIRS = [".git", "node_modules", "venv", "__pycache__", "dist", "build", ".idea", ".vscode"]
+    CODE_EXTENSIONS = (".py", ".js", ".ts", ".java", ".go", ".cs", ".rb", ".php")
     for root, dirs, files in os.walk(base_path):
         dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
-
         rel = os.path.relpath(root, base_path)
         node = tree
         if rel != ".":
             for part in rel.split(os.sep):
                 node = node.setdefault(part, {})
-
         for f in files:
             if f.endswith(CODE_EXTENSIONS):
                 node[f] = "FILE"
-
     return tree
-
-def extract_zip(uploaded_zip):
-    tmp = tempfile.TemporaryDirectory()
-    zip_path = Path(tmp.name) / uploaded_zip.name
-
-    with open(zip_path, "wb") as f:
-        f.write(uploaded_zip.read())
-
-    with zipfile.ZipFile(zip_path) as z:
-        z.extractall(tmp.name)
-
-    return tmp
-
-# =====================
-# UI SIDEBAR
-# =====================
-st.sidebar.title("🧠 Configuración")
-
-if st.sidebar.button("🧹 Nuevo Chat"):
-    for k in st.session_state.keys():
-        st.session_state[k] = [] if isinstance(st.session_state[k], list) else {}
-
-model = st.sidebar.selectbox(
-    "Modelo IA",
-    ["gpt-5", "gpt-5-mini", "claude-4-sonnet"],
-    index=0
-)
-MODEL_DEFAULT = model
-
-uploaded_zip = st.sidebar.file_uploader(
-    "📦 Subir repositorio (.zip)",
-    type=["zip"]
-)
-
-if uploaded_zip:
-    with st.spinner("Procesando repositorio..."):
-        tmp = extract_zip(uploaded_zip)
-        st.session_state.repo_path = tmp
-        st.session_state.repo_tree = build_repo_tree(tmp.name)
-    st.sidebar.success("Repositorio listo")
-
-# =====================
-# UX EXPLORADOR
-# =====================
-st.title("🧠 IA Copilot sobre Repositorio")
-
-col1, col2 = st.columns([1, 2])
-
-def render_tree(tree, path=""):
-    for k, v in tree.items():
-        if v == "FILE":
-            if st.button(f"📄 {path}{k}", key=path+k):
-                analizar_archivo(os.path.join(st.session_state.repo_path.name, path, k))
-        else:
-            with st.expander(f"📁 {path}{k}"):
-                render_tree(v, path + k + "/")
 
 def analizar_archivo(filepath):
     if filepath in st.session_state.analysis_cache:
-        st.info("Usando análisis en caché")
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": st.session_state.analysis_cache[filepath]
-        })
-        return
-
+        return st.session_state.analysis_cache[filepath]
     with open(filepath, encoding="utf-8", errors="ignore") as f:
-        code = f.read()
-
-    prompt = [
-        {
-            "role": "system",
-            "content": "Analiza este archivo de código. Explica responsabilidades y dependencias."
-        },
-        {
-            "role": "user",
-            "content": code[:12000]
-        }
-    ]
-
-    analysis = call_ia(prompt)
+        code = f.read()[:12000]
+    payload = {
+        "model": st.session_state.model,
+        "messages": [
+            {"role": "system", "content": "Analiza este archivo de código y explica responsabilidades y dependencias."},
+            {"role": "user", "content": code}
+        ]
+    }
+    if st.session_state.include_temp:
+        payload["temperature"] = st.session_state.temperature
+    if st.session_state.include_tokens:
+        payload["max_tokens"] = st.session_state.max_tokens
+    analysis = call_ia(payload)
     st.session_state.analysis_cache[filepath] = analysis
+    return analysis
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": analysis
-    })
+# ==================================================
+# SIDEBAR
+# ==================================================
+st.sidebar.title("⚙️ Configuración")
 
-with col1:
-    st.subheader("📂 Repositorio")
-    if st.session_state.repo_tree:
-        render_tree(st.session_state.repo_tree)
-    else:
-        st.info("Sube un ZIP para empezar")
+if st.sidebar.button("🧹 Nuevo Chat"):
+    for k in defaults:
+        st.session_state[k] = defaults[k]
 
-with col2:
-    st.subheader("💬 Chat técnico")
+st.session_state.model = st.sidebar.selectbox(
+    "Modelo IA",
+    options=[
+        "Innovation-gpt4o-mini", "Innovation-gpt4o",
+        "o4-mini", "o1", "o1-mini", "o3-mini",
+        "o1-preview", "gpt-5-chat", "gpt-4.1",
+        "gpt-4.1-mini", "gpt-5", "gpt-5-codex",
+        "gpt-5-mini", "gpt-5-nano",
+        "gpt-4.1-nano", "claude-3-5-sonnet",
+        "claude-4-sonnet", "claude-3-7-sonnet",
+        "claude-3-5-haiku", "claude-4-5-sonnet"
+    ],
+    index=0
+)
 
+st.session_state.include_temp = st.sidebar.checkbox("Incluir temperatura", value=True)
+st.session_state.temperature = st.sidebar.slider("Temperatura", 0.0, 1.0, 0.7, 0.1)
+st.session_state.include_tokens = st.sidebar.checkbox("Incluir max_tokens", value=True)
+st.session_state.max_tokens = st.sidebar.slider("Max tokens", 100, 4096, 1500, 100)
+
+template_type = st.sidebar.selectbox(
+    "Tipo de prompt inicial",
+    [
+        "Libre", "PO Casos exito", "PO Definicion epica",
+        "PO Definicion epica una historia", "PO Definicion historia",
+        "PO Definicion mejora tecnica", "PO Definicion spike",
+        "PO resumen reunion", "Programador Python"
+    ]
+)
+prompt_template = st.sidebar.text_area("Contenido del template", get_template(template_type), height=220)
+
+# ==================================================
+# TABS
+# ==================================================
+tab_chat, tab_repo = st.tabs(["💬 Chat clásico", "📦 Copiloto repositorio"])
+
+# ================= TAB 1: CHAT CLÁSICO =================
+with tab_chat:
+    st.title("💬 Chat Softtek Prompts IA")
     for m in st.session_state.messages:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
+    if prompt := st.chat_input("Escribe tu mensaje..."):
+        prompt_final = prompt_template.format(input=prompt) if not st.session_state.messages else prompt
+        st.session_state.messages.append({"role": "user", "content": prompt_final})
+        payload = {"model": st.session_state.model, "messages": st.session_state.messages}
+        if st.session_state.include_temp:
+            payload["temperature"] = st.session_state.temperature
+        if st.session_state.include_tokens:
+            payload["max_tokens"] = st.session_state.max_tokens
+        answer = call_ia(payload)
+        st.session_state.messages.append({"role": "assistant", "content": answer})
+        st.experimental_rerun()
 
-    if prompt := st.chat_input("Pregunta sobre el repositorio..."):
+# ================= TAB 2: COPILOTO REPOSITORIO =================
+with tab_repo:
+    st.title("📦 Copiloto de repositorios")
+    uploaded_zip = st.file_uploader("Sube un repositorio (.zip)", type=["zip"])
+    if uploaded_zip:
+        tmp = extract_zip(uploaded_zip)
+        st.session_state.repo_tmpdir = tmp
+        st.session_state.repo_tree = build_repo_tree(tmp.name)
 
-        if len(st.session_state.messages) > MAX_MESSAGES:
-            st.session_state.memory_summary = resumir_conversacion(
-                st.session_state.messages[:-4]
-            )
-            st.session_state.messages = st.session_state.messages[-4:]
+    col1, col2 = st.columns([1,2])
 
-        context = ""
-        if st.session_state.memory_summary:
-            context += f"MEMORIA:\n{st.session_state.memory_summary}\n\n"
+    def render_tree(tree, base, rel=""):
+        for k,v in tree.items():
+            if v=="FILE":
+                if st.button(f"📄 {rel}{k}", key=rel+k):
+                    path = os.path.join(base, rel, k)
+                    analysis = analizar_archivo(path)
+                    st.session_state.repo_messages.append({"role":"assistant","content":analysis})
+            else:
+                with st.expander(f"📁 {rel}{k}"):
+                    render_tree(v, base, rel+ k + "/")
 
-        prompt_final = context + prompt
+    with col1:
+        st.subheader("Repositorio")
+        if st.session_state.repo_tree:
+            render_tree(st.session_state.repo_tree, st.session_state.repo_tmpdir.name)
+        else:
+            st.info("Sube un ZIP para empezar")
 
-        st.session_state.messages.append({
-            "role": "user",
-            "content": prompt
-        })
-
-        response = call_ia([
-            {"role": "system", "content": prompt_final}
-        ])
-
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": response
-        })
+    with col2:
+        st.subheader("Chat técnico")
+        for m in st.session_state.repo_messages:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+        if repo_prompt := st.chat_input("Pregunta sobre el repositorio...", key="repo_chat"):
+            payload = {"model": st.session_state.model,
+                       "messages": st.session_state.repo_messages + [{"role":"user","content":repo_prompt}]}
+            if st.session_state.include_temp:
+                payload["temperature"] = st.session_state.temperature
+            if st.session_state.include_tokens:
+                payload["max_tokens"] = st.session_state.max_tokens
+            answer = call_ia(payload)
+            st.session_state.repo_messages.append({"role":"user","content":repo_prompt})
+            st.session_state.repo_messages.append({"role":"assistant","content":answer})
+            st.experimental_rerun()
