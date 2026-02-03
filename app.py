@@ -36,6 +36,7 @@ TOKEN = os.getenv("IA_TOKEN")
 defaults = {
     "messages": [],
     "repo_messages": [],
+    "repo_memory_summary": "",
     "memory_summary": "",
     "repo_tree": {},
     "repo_tmpdir": None,
@@ -128,6 +129,14 @@ def analizar_archivo(filepath):
     st.session_state.analysis_cache[filepath] = analysis
     return analysis
 
+def build_repo_context():
+    """
+    Devuelve el contexto resumido para el copiloto de repositorio
+    """
+    if st.session_state.repo_memory_summary:
+        return [{"role":"system","content":st.session_state.repo_memory_summary}]
+    return []
+
 # ==================================================
 # SIDEBAR
 # ==================================================
@@ -189,7 +198,7 @@ with tab_chat:
             payload["max_tokens"] = st.session_state.max_tokens
         answer = call_ia(payload)
         st.session_state.messages.append({"role": "assistant", "content": answer})
-        st.experimental_rerun()
+        st.rerun()
 
 # ================= TAB 2: COPILOTO REPOSITORIO =================
 with tab_repo:
@@ -209,6 +218,10 @@ with tab_repo:
                     path = os.path.join(base, rel, k)
                     analysis = analizar_archivo(path)
                     st.session_state.repo_messages.append({"role":"assistant","content":analysis})
+                    # Generar resumen automático si hay muchas entradas
+                    if len(st.session_state.repo_messages) > 10:
+                        st.session_state.repo_memory_summary = resumir_conversacion(st.session_state.repo_messages[:-4])
+                        st.session_state.repo_messages = st.session_state.repo_messages[-4:]
             else:
                 with st.expander(f"📁 {rel}{k}"):
                     render_tree(v, base, rel+ k + "/")
@@ -227,7 +240,7 @@ with tab_repo:
                 st.markdown(m["content"])
         if repo_prompt := st.chat_input("Pregunta sobre el repositorio...", key="repo_chat"):
             payload = {"model": st.session_state.model,
-                       "messages": st.session_state.repo_messages + [{"role":"user","content":repo_prompt}]}
+                       "messages": build_repo_context() + st.session_state.repo_messages + [{"role":"user","content":repo_prompt}]}
             if st.session_state.include_temp:
                 payload["temperature"] = st.session_state.temperature
             if st.session_state.include_tokens:
@@ -235,4 +248,4 @@ with tab_repo:
             answer = call_ia(payload)
             st.session_state.repo_messages.append({"role":"user","content":repo_prompt})
             st.session_state.repo_messages.append({"role":"assistant","content":answer})
-            st.experimental_rerun()
+            st.rerun()
