@@ -75,6 +75,8 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+CHUNK_SIZE = 10000  # caracteres por fragmento para archivos grandes
+
 # ==================================================
 # HELPERS
 # ==================================================
@@ -138,25 +140,40 @@ def build_repo_tree(base_path):
     return tree
 
 def analizar_archivo(filepath):
+    """Analiza un archivo grande por chunks y actualiza cache y memoria resumida."""
     if filepath in st.session_state.analysis_cache:
         return st.session_state.analysis_cache[filepath]
+
     with open(filepath, encoding="utf-8", errors="ignore") as f:
-        code = f.read()[:12000]
-    payload = {
-        "model": st.session_state.model,
-        "messages": [
-            {"role": "system", "content": "Analiza este archivo de código y explica responsabilidades y dependencias."},
-            {"role": "user", "content": code}
-        ]
-    }
-    if st.session_state.include_temp:
-        payload["temperature"] = st.session_state.temperature
-    if st.session_state.include_tokens:
-        payload["max_tokens"] = st.session_state.max_tokens
-    with st.spinner("🤖 La IA está pensando..."):
-        analysis = call_ia(payload)
-    st.session_state.analysis_cache[filepath] = analysis
-    return analysis
+        code = f.read()
+    fragments = [code[i:i+CHUNK_SIZE] for i in range(0, len(code), CHUNK_SIZE)]
+    analysis_full = ""
+    for fragment in fragments:
+        payload = {
+            "model": st.session_state.model,
+            "messages": [
+                {"role": "system", "content": "Analiza este fragmento de código y explica responsabilidades y dependencias."},
+                {"role": "user", "content": fragment}
+            ]
+        }
+        if st.session_state.include_temp:
+            payload["temperature"] = st.session_state.temperature
+        if st.session_state.include_tokens:
+            payload["max_tokens"] = st.session_state.max_tokens
+        with st.spinner("🤖 La IA está pensando..."):
+            fragment_analysis = call_ia(payload)
+        analysis_full += fragment_analysis + "\n"
+        st.session_state.repo_messages.append({"role": "assistant", "content": fragment_analysis})
+
+    st.session_state.analysis_cache[filepath] = analysis_full
+
+    # Actualizar memoria resumida cada archivo
+    if len(st.session_state.repo_messages) > 10:
+        st.session_state.repo_memory_summary = resumir_conversacion(st.session_state.repo_messages[-10:])
+        # Opcional: limpiar mensajes antiguos
+        st.session_state.repo_messages = st.session_state.repo_messages[-10:]
+
+    return analysis_full
 
 def build_repo_context():
     if st.session_state.repo_memory_summary:
@@ -243,11 +260,7 @@ with tab_repo:
             if v=="FILE":
                 if st.button(f"📄 {rel}{k}", key=rel+k):
                     path = os.path.join(base, rel, k)
-                    analysis = analizar_archivo(path)
-                    st.session_state.repo_messages.append({"role":"assistant","content":analysis})
-                    if len(st.session_state.repo_messages) > 10:
-                        st.session_state.repo_memory_summary = resumir_conversacion(st.session_state.repo_messages[:-4])
-                        st.session_state.repo_messages = st.session_state.repo_messages[-4:]
+                    analizar_archivo(path)  # análisis con chunks y memoria resumida
             else:
                 with st.expander(f"📁 {rel}{k}"):
                     render_tree(v, base, rel+ k + "/")
