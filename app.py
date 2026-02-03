@@ -125,7 +125,8 @@ def analizar_archivo(filepath):
         payload["temperature"] = st.session_state.temperature
     if st.session_state.include_tokens:
         payload["max_tokens"] = st.session_state.max_tokens
-    analysis = call_ia(payload)
+    with st.spinner("🤖 La IA está pensando..."):
+        analysis = call_ia(payload)
     st.session_state.analysis_cache[filepath] = analysis
     return analysis
 
@@ -196,7 +197,8 @@ with tab_chat:
             payload["temperature"] = st.session_state.temperature
         if st.session_state.include_tokens:
             payload["max_tokens"] = st.session_state.max_tokens
-        answer = call_ia(payload)
+        with st.spinner("🤖 La IA está pensando..."):
+            answer = call_ia(payload)
         st.session_state.messages.append({"role": "assistant", "content": answer})
         st.rerun()
 
@@ -245,7 +247,8 @@ with tab_repo:
                 payload["temperature"] = st.session_state.temperature
             if st.session_state.include_tokens:
                 payload["max_tokens"] = st.session_state.max_tokens
-            answer = call_ia(payload)
+            with st.spinner("🤖 La IA está pensando..."):
+                answer = call_ia(payload)
             st.session_state.repo_messages.append({"role":"user","content":repo_prompt})
             st.session_state.repo_messages.append({"role":"assistant","content":answer})
             st.rerun()
