@@ -28,6 +28,8 @@ def get_criterios_epica_template():
     Se han de listar tambien posibles riesgos y dependencias si las hay.
     Mostrar un listado de posibles historias en que dividir la epica con formato: titulo; Como; QUiero; Para; detalle.
     para cada una de estas historias han de mostrarse los casos de uso con el formato: dado, cuando y entonces. Se han de mostrar en una tabla de 3 columnas.
+    Tambien para la Historia, incluye una tabla de criterios de aceptacion.
+    SI en la historia identificas Dependencias, creame otra tabla de dependencias en la historia.
     El detalle es: {input}
     """
 
@@ -41,6 +43,8 @@ def get_criterios_epica_only_history_template():
     Se han de listar tambien posibles riesgos y dependencias si las hay.
     Mostrar el detalle de una historia para la construccion y pruebas de la epica con formato: titulo; Como; QUiero; Para; detalle.
     Para cada una de estas historias han de mostrarse los casos de uso con el formato: dado, cuando y entonces. Se han de mostrar en una tabla de 3 columnas.
+    Tambien para la Historia, incluye una tabla de criterios de aceptacion.
+    SI en la historia identificas Dependencias, creame otra tabla de dependencias en la historia.
     El detalle de la epica es: {input}
     """
 
@@ -68,6 +72,8 @@ def get_historia_epica_template():
     Quiero tambien una descripcion general de la historia.
     Tambien han de mostrarse los casos de uso con el formato: dado, cuando y entonces.
     Necesito que los casos de uso, al margen de que se expliquen bien, que tambien se muestren en una tabla de 3 columnas.
+    Incluye una tabla de criterios de aceptacion.
+    SI identificas Dependencias, creame otra tabla de dependencias.
     El detalle es: {input}
     """
 
@@ -78,4 +84,5 @@ def get_resumen_reunion_template():
     Haces mucha reuniones y necesitas sacar el resumen de la reunion, con participantes, resumen con puntos mas importantes y un resumen de cada punto, asi como las epicas que pueden crearse de lo que se hable.
     El detalle de la reunion y la transcripcion es: {input}
     """
+
 
