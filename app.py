@@ -81,7 +81,8 @@ defaults = {
     "embedding_model": None,
     "devops_org": "",
     "devops_project": "",
-    "devops_pat": ""
+    "devops_pat": "",
+    "devops_top_k": 5
 }
 
 for k, v in defaults.items():
@@ -217,13 +218,23 @@ def cargar_modelo_embeddings():
     """Carga el modelo de embeddings una sola vez"""
     return SentenceTransformer('all-MiniLM-L6-v2')
 
-def obtener_incidencias_devops(organization, project, pat, area_path=None):
+def obtener_incidencias_devops(organization, project, pat, area_path=None, work_item_types=None, max_items=200):
     """
-    Obtiene las incidencias (bugs) de Azure DevOps
+    Obtiene work items de Azure DevOps con filtros configurables
     """
     url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/wiql?api-version=7.1"
     
-    # Query WIQL con filtro opcional por área
+    # Construir filtro de tipos
+    if not work_item_types or len(work_item_types) == 0:
+        work_item_types = ['Bug']
+    
+    if len(work_item_types) == 1:
+        type_filter = f"[System.WorkItemType] = '{work_item_types[0]}'"
+    else:
+        types_str = "', '".join(work_item_types)
+        type_filter = f"[System.WorkItemType] IN ('{types_str}')"
+    
+    # Construir filtro de área
     area_filter = ""
     if area_path:
         area_filter = f"AND [System.AreaPath] = '{area_path}'"
@@ -232,18 +243,18 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None):
         "query": f"""
             SELECT [System.Id], [System.Title], [System.State], 
                    [System.Description], [System.Tags], 
-                   [System.AreaPath],
+                   [System.WorkItemType], [System.AreaPath],
                    [Microsoft.VSTS.Common.ResolvedReason],
                    [System.CreatedDate], [System.ChangedDate]
             FROM WorkItems 
-            WHERE [System.WorkItemType] = 'Bug'
+            WHERE {type_filter}
             AND [System.State] <> 'Removed'
             {area_filter}
             ORDER BY [System.ChangedDate] DESC
         """
     }
     
-    # CORRECCIÓN: El PAT debe estar en formato base64 de ":{PAT}"
+    # Encoding del PAT
     credentials = f":{pat}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
     
@@ -253,21 +264,19 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None):
     }
     
     try:
-        # Debug: Mostrar info de la petición
+        # Debug
         st.info(f"🔍 Consultando: {organization}/{project}")
+        st.info(f"📋 Tipos: {', '.join(work_item_types)}")
         if area_path:
-            st.info(f"📁 Filtrando por área: {area_path}")
+            st.info(f"📁 Área: {area_path}")
+        st.info(f"🔢 Límite: {max_items} items")
         
-        # Primero ejecutamos la query para obtener IDs
         response = requests.post(url, json=wiql, headers=headers, timeout=30)
-        
-        # Debug: Mostrar código de respuesta
         st.write(f"**Status Code:** {response.status_code}")
         
-        # Si no es 200, mostrar el error
         if response.status_code != 200:
             st.error(f"❌ Error HTTP {response.status_code}")
-            st.code(response.text[:500])  # Mostrar primeros 500 caracteres
+            st.code(response.text[:500])
             return []
         
         response.raise_for_status()
@@ -282,36 +291,43 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None):
         work_item_ids = [item["id"] for item in response_json.get("workItems", [])]
         
         if not work_item_ids:
-            st.warning("⚠️ La query no devolvió ningún Work Item ID")
-            st.info("Verifica que existan Bugs en el proyecto/área especificada")
+            st.warning("⚠️ La query no devolvió ningún Work Item")
+            st.info("Verifica que existan items del tipo seleccionado")
             return []
         
-        st.success(f"✅ Se encontraron {len(work_item_ids)} IDs de incidencias")
+        # Limitar al máximo configurado
+        work_item_ids = work_item_ids[:max_items]
+        st.success(f"✅ Se encontraron {len(work_item_ids)} work items")
         
-        # Obtenemos los detalles de cada work item (limitamos a 200)
-        ids_str = ",".join(map(str, work_item_ids[:200]))
-        details_url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/workitems?ids={ids_str}&api-version=7.1"
+        # Obtener detalles en lotes de 200
+        all_items = []
+        batch_size = 200
         
-        details_response = requests.get(details_url, headers=headers, timeout=30)
-        details_response.raise_for_status()
+        for i in range(0, len(work_item_ids), batch_size):
+            batch_ids = work_item_ids[i:i+batch_size]
+            ids_str = ",".join(map(str, batch_ids))
+            details_url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/workitems?ids={ids_str}&api-version=7.1"
+            
+            details_response = requests.get(details_url, headers=headers, timeout=30)
+            details_response.raise_for_status()
+            
+            for item in details_response.json().get("value", []):
+                fields = item.get("fields", {})
+                all_items.append({
+                    "id": item["id"],
+                    "tipo": fields.get("System.WorkItemType", ""),
+                    "titulo": fields.get("System.Title", "Sin título"),
+                    "descripcion": fields.get("System.Description", "Sin descripción"),
+                    "estado": fields.get("System.State", ""),
+                    "area": fields.get("System.AreaPath", ""),
+                    "tags": fields.get("System.Tags", ""),
+                    "resolucion": fields.get("Microsoft.VSTS.Common.ResolvedReason", ""),
+                    "fecha_creacion": fields.get("System.CreatedDate", ""),
+                    "fecha_cambio": fields.get("System.ChangedDate", ""),
+                    "url": item.get("url", "")
+                })
         
-        incidencias = []
-        for item in details_response.json().get("value", []):
-            fields = item.get("fields", {})
-            incidencias.append({
-                "id": item["id"],
-                "titulo": fields.get("System.Title", "Sin título"),
-                "descripcion": fields.get("System.Description", "Sin descripción"),
-                "estado": fields.get("System.State", ""),
-                "area": fields.get("System.AreaPath", ""),
-                "tags": fields.get("System.Tags", ""),
-                "resolucion": fields.get("Microsoft.VSTS.Common.ResolvedReason", ""),
-                "fecha_creacion": fields.get("System.CreatedDate", ""),
-                "fecha_cambio": fields.get("System.ChangedDate", ""),
-                "url": item.get("url", "")
-            })
-        
-        return incidencias
+        return all_items
     
     except requests.exceptions.Timeout:
         st.error("❌ Timeout: Azure DevOps no respondió a tiempo")
@@ -337,7 +353,6 @@ def generar_embeddings_incidencias(incidencias, modelo):
     """
     textos = []
     for inc in incidencias:
-        # Combinamos título, descripción y tags para el embedding
         texto_completo = f"{inc['titulo']} {limpiar_html(inc['descripcion'])} {inc['tags']} {inc['resolucion']}"
         textos.append(texto_completo)
     
@@ -352,12 +367,10 @@ def buscar_incidencias_similares(query, incidencias, embeddings, modelo, top_k=5
     """
     query_embedding = modelo.encode([query])[0]
     
-    # Calculamos similitud coseno
     similitudes = np.dot(embeddings, query_embedding) / (
         np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_embedding)
     )
     
-    # Obtenemos los índices de los top_k más similares
     top_indices = np.argsort(similitudes)[-top_k:][::-1]
     
     resultados = []
@@ -373,14 +386,15 @@ def construir_contexto_devops(incidencias_similares):
     """
     Construye el contexto para enviar a la IA con las incidencias encontradas
     """
-    contexto = "**Incidencias similares encontradas en Azure DevOps:**\n\n"
+    contexto = "**Work items similares encontrados en Azure DevOps:**\n\n"
     
     for i, resultado in enumerate(incidencias_similares, 1):
         inc = resultado["incidencia"]
         sim = resultado["similitud"]
         
-        contexto += f"**Incidencia #{i}** (Similitud: {sim:.2%})\n"
+        contexto += f"**Work Item #{i}** (Similitud: {sim:.2%})\n"
         contexto += f"- **ID**: {inc['id']}\n"
+        contexto += f"- **Tipo**: {inc['tipo']}\n"
         contexto += f"- **Título**: {inc['titulo']}\n"
         contexto += f"- **Estado**: {inc['estado']}\n"
         if inc['resolucion']:
@@ -514,13 +528,14 @@ with tab_repo:
 # ================= TAB 3: CONSULTA TAREAS DEVOPS =================
 with tab_devops:
     st.title("🎯 Consulta de Tareas Azure DevOps")
-    st.markdown("Pregunta sobre incidencias anteriores y encuentra soluciones similares usando IA")
+    st.markdown("Pregunta sobre work items anteriores y encuentra soluciones similares usando IA")
     
     # Configuración de Azure DevOps
     with st.expander("⚙️ Configuración Azure DevOps", expanded=not st.session_state.devops_indexed):
         col1, col2 = st.columns(2)
         
         with col1:
+            st.markdown("#### 🔗 Conexión")
             org_input = st.text_input(
                 "Organización", 
                 value=st.session_state.devops_org if st.session_state.devops_org else "TelepizzaIT",
@@ -531,63 +546,118 @@ with tab_devops:
                 value=st.session_state.devops_project if st.session_state.devops_project else "Sales",
                 placeholder="ej: Sales"
             )
-            area_path_input = st.text_input(
-                "Área (opcional)",
-                value="",
-                placeholder="ej: Sales\\MySaga POC",
-                help="Deja vacío para traer todas las áreas"
-            )
-        
-        with col2:
             pat_input = st.text_input(
                 "Personal Access Token (PAT)", 
                 value=st.session_state.devops_pat,
                 type="password",
-                help="Crea un PAT en Azure DevOps con permisos de lectura en Work Items"
+                help="PAT con permisos de lectura en Work Items"
+            )
+        
+        with col2:
+            st.markdown("#### 🎛️ Filtros")
+            work_item_types = st.multiselect(
+                "Tipos de Work Items",
+                options=["Bug", "User Story", "Task", "Feature", "Epic", "Issue", "Test Case"],
+                default=["Bug"],
+                help="Selecciona uno o más tipos"
             )
             
-            st.markdown("---")
-            if st.button("🔄 Sincronizar e Indexar Incidencias", use_container_width=True):
+            area_path_input = st.text_input(
+                "Área (opcional)",
+                value="",
+                placeholder="ej: Sales\\MySaga POC",
+                help="Deja vacío para todas las áreas"
+            )
+            
+            max_items = st.slider(
+                "Límite de items a traer",
+                min_value=50,
+                max_value=1000,
+                value=200,
+                step=50,
+                help="Máximo de work items a sincronizar"
+            )
+            
+            top_k_similar = st.slider(
+                "Items similares a mostrar",
+                min_value=3,
+                max_value=10,
+                value=5,
+                step=1,
+                help="Número de items similares para enviar a Frida"
+            )
+        
+        st.markdown("---")
+        
+        col_btn1, col_btn2 = st.columns([3, 1])
+        with col_btn1:
+            if st.button("🔄 Sincronizar e Indexar Work Items", use_container_width=True):
                 if not org_input or not project_input or not pat_input:
                     st.error("❌ Completa organización, proyecto y PAT")
+                elif not work_item_types or len(work_item_types) == 0:
+                    st.error("❌ Selecciona al menos un tipo de work item")
                 else:
                     st.session_state.devops_org = org_input
                     st.session_state.devops_project = project_input
                     st.session_state.devops_pat = pat_input
                     
-                    # Obtener incidencias
-                    with st.spinner("📥 Obteniendo incidencias de Azure DevOps..."):
+                    with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
                         incidencias = obtener_incidencias_devops(
                             org_input, 
                             project_input, 
                             pat_input,
-                            area_path=area_path_input if area_path_input else None
+                            area_path=area_path_input if area_path_input else None,
+                            work_item_types=work_item_types,
+                            max_items=max_items
                         )
                     
                     if incidencias:
-                        st.success(f"✅ Se encontraron {len(incidencias)} incidencias")
+                        st.success(f"✅ Se encontraron {len(incidencias)} work items")
+                        
+                        tipos_count = {}
+                        for inc in incidencias:
+                            tipo = inc['tipo']
+                            tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
+                        
+                        st.info(f"📊 Distribución: " + ", ".join([f"{t}: {c}" for t, c in tipos_count.items()]))
+                        
                         st.session_state.devops_incidencias = incidencias
                         
-                        # Cargar modelo de embeddings
                         if st.session_state.embedding_model is None:
                             st.session_state.embedding_model = cargar_modelo_embeddings()
                         
-                        # Generar embeddings
                         embeddings = generar_embeddings_incidencias(
                             incidencias, 
                             st.session_state.embedding_model
                         )
                         st.session_state.devops_embeddings = embeddings
                         st.session_state.devops_indexed = True
+                        st.session_state.devops_top_k = top_k_similar
                         
                         st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
                         st.rerun()
                     else:
-                        st.warning("⚠️ No se encontraron incidencias o hubo un error de conexión")
+                        st.warning("⚠️ No se encontraron work items o hubo un error")
+        
+        with col_btn2:
+            if st.button("🗑️ Limpiar", use_container_width=True):
+                st.session_state.devops_incidencias = []
+                st.session_state.devops_embeddings = None
+                st.session_state.devops_indexed = False
+                st.session_state.devops_messages = []
+                st.success("✅ Cache limpiado")
+                st.rerun()
     
-    # Mostrar estado de la indexación
+    # Estado de indexación
     if st.session_state.devops_indexed:
-        st.info(f"📊 **{len(st.session_state.devops_incidencias)} incidencias indexadas** y listas para consulta")
+        tipos_en_cache = {}
+        for inc in st.session_state.devops_incidencias:
+            tipo = inc['tipo']
+            tipos_en_cache[tipo] = tipos_en_cache.get(tipo, 0) + 1
+        
+        tipos_str = ", ".join([f"{t} ({c})" for t, c in tipos_en_cache.items()])
+        st.info(f"📊 **{len(st.session_state.devops_incidencias)} work items indexados**: {tipos_str}")
+        st.info(f"🎯 **Top-K configurado**: {st.session_state.get('devops_top_k', 5)} items similares por consulta")
     
     # Chat de consultas
     st.markdown("---")
@@ -597,64 +667,66 @@ with tab_devops:
     with col_stats:
         st.subheader("📈 Estadísticas")
         if st.session_state.devops_incidencias:
+            st.markdown("**Por tipo:**")
+            tipos = {}
+            for inc in st.session_state.devops_incidencias:
+                tipo = inc['tipo']
+                tipos[tipo] = tipos.get(tipo, 0) + 1
+            for tipo, count in sorted(tipos.items()):
+                st.metric(tipo, count)
+            
+            st.markdown("---")
+            
+            st.markdown("**Por estado:**")
             estados = {}
             for inc in st.session_state.devops_incidencias:
                 estado = inc['estado']
                 estados[estado] = estados.get(estado, 0) + 1
-            
-            st.markdown("**Estados de incidencias:**")
-            for estado, count in estados.items():
-                st.metric(estado, count)
+            for estado, count in sorted(estados.items(), key=lambda x: x[1], reverse=True)[:5]:
+                st.text(f"{estado}: {count}")
         else:
-            st.info("Sincroniza primero las incidencias")
+            st.info("Sincroniza primero los work items")
     
     with col_chat:
         st.subheader("💬 Chat de consultas")
         
-        # Mostrar mensajes anteriores
         for m in st.session_state.devops_messages:
             with st.chat_message(m["role"]):
                 st.markdown(m["content"])
         
-        # Input de consulta
         if devops_query := st.chat_input(
-            "Pregunta sobre incidencias... ej: '¿Cómo se solucionó el error de login?'", 
+            "Pregunta sobre work items... ej: '¿Cómo se implementó X?'", 
             key="devops_chat",
             disabled=not st.session_state.devops_indexed
         ):
             if not st.session_state.devops_indexed:
-                st.warning("⚠️ Primero debes sincronizar e indexar las incidencias")
+                st.warning("⚠️ Primero debes sincronizar e indexar los work items")
             else:
-                # Añadir pregunta del usuario
                 st.session_state.devops_messages.append({"role": "user", "content": devops_query})
                 
-                # Buscar incidencias similares
-                with st.spinner("🔍 Buscando incidencias similares..."):
+                top_k = st.session_state.get('devops_top_k', 5)
+                
+                with st.spinner(f"🔍 Buscando los {top_k} work items más similares..."):
                     resultados = buscar_incidencias_similares(
                         devops_query,
                         st.session_state.devops_incidencias,
                         st.session_state.devops_embeddings,
                         st.session_state.embedding_model,
-                        top_k=5
+                        top_k=top_k
                     )
                 
-                # Construir contexto para la IA
                 contexto = construir_contexto_devops(resultados)
                 
-                # Preparar prompt para Frida
-                system_prompt = """Eres un asistente técnico experto en analizar incidencias de software. 
-Tu tarea es ayudar a encontrar soluciones basándote en incidencias anteriores similares.
+                system_prompt = """Eres un asistente técnico experto en analizar work items de software. 
 
 Cuando respondas:
-1. Analiza las incidencias similares que se te proporcionan
-2. Si hay una coincidencia exacta o muy similar, explica cómo se resolvió
-3. Si no hay coincidencia exacta, propón soluciones basadas en los casos similares
-4. Sé específico y técnico en tus recomendaciones
-5. Menciona el ID de las incidencias relevantes para que el usuario pueda consultarlas"""
+1. Analiza los work items similares (pueden ser Bugs, User Stories, Tasks, etc.)
+2. Si hay coincidencia exacta o similar, explica cómo se resolvió o implementó
+3. Si no hay coincidencia exacta, propón soluciones basadas en casos similares
+4. Sé específico y técnico
+5. Menciona el ID y tipo de los work items relevantes
+6. Si encuentras patrones comunes, menciónalo"""
 
-                prompt_completo = f"{system_prompt}\n\n{contexto}\n\n**Consulta del usuario:** {devops_query}"
-                
-                # Llamar a Frida
                 payload = {
                     "model": st.session_state.model,
                     "messages": [
@@ -668,26 +740,25 @@ Cuando respondas:
                 if st.session_state.include_tokens:
                     payload["max_tokens"] = st.session_state.max_tokens
                 
-                with st.spinner("🤖 Frida está analizando las incidencias..."):
+                with st.spinner("🤖 Frida está analizando los work items..."):
                     respuesta = call_ia(payload)
                 
-                # Añadir respuesta de la IA
                 st.session_state.devops_messages.append({"role": "assistant", "content": respuesta})
                 
-                # Mostrar las incidencias encontradas como referencia
-                with st.expander("📋 Ver incidencias similares encontradas"):
+                with st.expander(f"📋 Ver los {top_k} work items más similares"):
                     for i, resultado in enumerate(resultados, 1):
                         inc = resultado["incidencia"]
                         sim = resultado["similitud"]
                         
-                        st.markdown(f"### Incidencia {i} - ID: {inc['id']} (Similitud: {sim:.1%})")
+                        st.markdown(f"### Work Item {i} - [{inc['tipo']}] ID: {inc['id']} (Similitud: {sim:.1%})")
                         st.markdown(f"**Título:** {inc['titulo']}")
                         st.markdown(f"**Estado:** {inc['estado']}")
+                        st.markdown(f"**Área:** {inc['area']}")
                         if inc['resolucion']:
                             st.markdown(f"**Resolución:** {inc['resolucion']}")
                         st.markdown(f"**Descripción:** {limpiar_html(inc['descripcion'])[:300]}...")
+                        if inc['tags']:
+                            st.markdown(f"**Tags:** {inc['tags']}")
                         st.markdown("---")
                 
                 st.rerun()
-
-
