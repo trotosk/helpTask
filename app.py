@@ -523,13 +523,19 @@ with tab_devops:
         with col1:
             org_input = st.text_input(
                 "Organización", 
-                value=st.session_state.devops_org,
-                placeholder="ej: softtek"
+                value=st.session_state.devops_org if st.session_state.devops_org else "TelepizzaIT",
+                placeholder="ej: TelepizzaIT"
             )
             project_input = st.text_input(
                 "Proyecto", 
-                value=st.session_state.devops_project,
-                placeholder="ej: MiProyecto"
+                value=st.session_state.devops_project if st.session_state.devops_project else "Sales",
+                placeholder="ej: Sales"
+            )
+            area_path_input = st.text_input(
+                "Área (opcional)",
+                value="",
+                placeholder="ej: Sales\\MySaga POC",
+                help="Deja vacío para traer todas las áreas"
             )
         
         with col2:
@@ -543,7 +549,7 @@ with tab_devops:
             st.markdown("---")
             if st.button("🔄 Sincronizar e Indexar Incidencias", use_container_width=True):
                 if not org_input or not project_input or not pat_input:
-                    st.error("❌ Completa todos los campos de configuración")
+                    st.error("❌ Completa organización, proyecto y PAT")
                 else:
                     st.session_state.devops_org = org_input
                     st.session_state.devops_project = project_input
@@ -551,7 +557,12 @@ with tab_devops:
                     
                     # Obtener incidencias
                     with st.spinner("📥 Obteniendo incidencias de Azure DevOps..."):
-                        incidencias = obtener_incidencias_devops(org_input, project_input, pat_input)
+                        incidencias = obtener_incidencias_devops(
+                            org_input, 
+                            project_input, 
+                            pat_input,
+                            area_path=area_path_input if area_path_input else None
+                        )
                     
                     if incidencias:
                         st.success(f"✅ Se encontraron {len(incidencias)} incidencias")
@@ -572,7 +583,7 @@ with tab_devops:
                         st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
                         st.rerun()
                     else:
-                        st.warning("⚠️ No se encontraron incidencias o hubo un error")
+                        st.warning("⚠️ No se encontraron incidencias o hubo un error de conexión")
     
     # Mostrar estado de la indexación
     if st.session_state.devops_indexed:
@@ -678,4 +689,5 @@ Cuando respondas:
                         st.markdown("---")
                 
                 st.rerun()
+
 
