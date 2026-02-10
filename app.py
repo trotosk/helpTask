@@ -3,6 +3,7 @@ import requests
 import os
 import zipfile
 import tempfile
+import base64
 from pathlib import Path
 import json
 from datetime import datetime
@@ -216,45 +217,82 @@ def cargar_modelo_embeddings():
     """Carga el modelo de embeddings una sola vez"""
     return SentenceTransformer('all-MiniLM-L6-v2')
 
-def obtener_incidencias_devops(organization, project, pat):
+def obtener_incidencias_devops(organization, project, pat, area_path=None):
     """
     Obtiene las incidencias (bugs) de Azure DevOps
     """
     url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/wiql?api-version=7.1"
     
-    # Query para obtener solo bugs (Work Item Type = Bug)
+    # Query WIQL con filtro opcional por área
+    area_filter = ""
+    if area_path:
+        area_filter = f"AND [System.AreaPath] = '{area_path}'"
+    
     wiql = {
-        "query": """
+        "query": f"""
             SELECT [System.Id], [System.Title], [System.State], 
                    [System.Description], [System.Tags], 
+                   [System.AreaPath],
                    [Microsoft.VSTS.Common.ResolvedReason],
                    [System.CreatedDate], [System.ChangedDate]
             FROM WorkItems 
             WHERE [System.WorkItemType] = 'Bug'
             AND [System.State] <> 'Removed'
+            {area_filter}
             ORDER BY [System.ChangedDate] DESC
         """
     }
     
+    # CORRECCIÓN: El PAT debe estar en formato base64 de ":{PAT}"
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+    
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Basic {pat}"
+        "Authorization": f"Basic {encoded_credentials}"
     }
     
     try:
-        # Primero ejecutamos la query para obtener IDs
-        response = requests.post(url, json=wiql, headers=headers)
-        response.raise_for_status()
-        work_item_ids = [item["id"] for item in response.json().get("workItems", [])]
+        # Debug: Mostrar info de la petición
+        st.info(f"🔍 Consultando: {organization}/{project}")
+        if area_path:
+            st.info(f"📁 Filtrando por área: {area_path}")
         
-        if not work_item_ids:
+        # Primero ejecutamos la query para obtener IDs
+        response = requests.post(url, json=wiql, headers=headers, timeout=30)
+        
+        # Debug: Mostrar código de respuesta
+        st.write(f"**Status Code:** {response.status_code}")
+        
+        # Si no es 200, mostrar el error
+        if response.status_code != 200:
+            st.error(f"❌ Error HTTP {response.status_code}")
+            st.code(response.text[:500])  # Mostrar primeros 500 caracteres
             return []
         
-        # Obtenemos los detalles de cada work item
-        ids_str = ",".join(map(str, work_item_ids[:200]))  # Limitamos a 200 para no saturar
+        response.raise_for_status()
+        
+        try:
+            response_json = response.json()
+        except json.JSONDecodeError as e:
+            st.error(f"❌ Error al parsear JSON: {str(e)}")
+            st.code(response.text[:500])
+            return []
+        
+        work_item_ids = [item["id"] for item in response_json.get("workItems", [])]
+        
+        if not work_item_ids:
+            st.warning("⚠️ La query no devolvió ningún Work Item ID")
+            st.info("Verifica que existan Bugs en el proyecto/área especificada")
+            return []
+        
+        st.success(f"✅ Se encontraron {len(work_item_ids)} IDs de incidencias")
+        
+        # Obtenemos los detalles de cada work item (limitamos a 200)
+        ids_str = ",".join(map(str, work_item_ids[:200]))
         details_url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/workitems?ids={ids_str}&api-version=7.1"
         
-        details_response = requests.get(details_url, headers=headers)
+        details_response = requests.get(details_url, headers=headers, timeout=30)
         details_response.raise_for_status()
         
         incidencias = []
@@ -265,6 +303,7 @@ def obtener_incidencias_devops(organization, project, pat):
                 "titulo": fields.get("System.Title", "Sin título"),
                 "descripcion": fields.get("System.Description", "Sin descripción"),
                 "estado": fields.get("System.State", ""),
+                "area": fields.get("System.AreaPath", ""),
                 "tags": fields.get("System.Tags", ""),
                 "resolucion": fields.get("Microsoft.VSTS.Common.ResolvedReason", ""),
                 "fecha_creacion": fields.get("System.CreatedDate", ""),
@@ -274,8 +313,13 @@ def obtener_incidencias_devops(organization, project, pat):
         
         return incidencias
     
+    except requests.exceptions.Timeout:
+        st.error("❌ Timeout: Azure DevOps no respondió a tiempo")
+        return []
     except requests.exceptions.RequestException as e:
-        st.error(f"Error al conectar con Azure DevOps: {str(e)}")
+        st.error(f"❌ Error de conexión: {str(e)}")
+        if hasattr(e.response, 'text'):
+            st.code(e.response.text[:500])
         return []
 
 def limpiar_html(texto):
@@ -634,3 +678,4 @@ Cuando respondas:
                         st.markdown("---")
                 
                 st.rerun()
+
