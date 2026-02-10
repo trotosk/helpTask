@@ -4,6 +4,10 @@ import os
 import zipfile
 import tempfile
 from pathlib import Path
+import json
+from datetime import datetime
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
 # ==================================================
 # USUARIOS FIJOS
@@ -63,11 +67,20 @@ TOKEN = os.getenv("IA_TOKEN")
 defaults = {
     "messages": [],
     "repo_messages": [],
+    "devops_messages": [],
     "repo_memory_summary": "",
     "memory_summary": "",
     "repo_tree": {},
     "repo_tmpdir": None,
-    "analysis_cache": {}
+    "analysis_cache": {},
+    # Nuevo estado para DevOps
+    "devops_incidencias": [],
+    "devops_embeddings": None,
+    "devops_indexed": False,
+    "embedding_model": None,
+    "devops_org": "",
+    "devops_project": "",
+    "devops_pat": ""
 }
 
 for k, v in defaults.items():
@@ -77,7 +90,7 @@ for k, v in defaults.items():
 CHUNK_SIZE = 10000  # caracteres por fragmento para archivos grandes
 
 # ==================================================
-# HELPERS
+# HELPERS ORIGINALES
 # ==================================================
 def call_ia(payload):
     headers = {
@@ -165,12 +178,10 @@ def analizar_archivo(filepath, progress_bar=None, current_count=None, total_file
 
     st.session_state.analysis_cache[filepath] = analysis_full
 
-    # Actualizar memoria resumida cada 10 fragmentos
     if len(st.session_state.repo_messages) > 10:
         st.session_state.repo_memory_summary = resumir_conversacion(st.session_state.repo_messages[-10:])
         st.session_state.repo_messages = st.session_state.repo_messages[-10:]
 
-    # Actualizar barra de progreso si se pasa
     if progress_bar and current_count is not None and total_files:
         progress_bar.progress(current_count / total_files)
 
@@ -195,6 +206,145 @@ def build_repo_context():
     if st.session_state.repo_memory_summary:
         return [{"role":"system","content":st.session_state.repo_memory_summary}]
     return []
+
+# ==================================================
+# HELPERS PARA AZURE DEVOPS
+# ==================================================
+
+@st.cache_resource
+def cargar_modelo_embeddings():
+    """Carga el modelo de embeddings una sola vez"""
+    return SentenceTransformer('all-MiniLM-L6-v2')
+
+def obtener_incidencias_devops(organization, project, pat):
+    """
+    Obtiene las incidencias (bugs) de Azure DevOps
+    """
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/wiql?api-version=7.1"
+    
+    # Query para obtener solo bugs (Work Item Type = Bug)
+    wiql = {
+        "query": """
+            SELECT [System.Id], [System.Title], [System.State], 
+                   [System.Description], [System.Tags], 
+                   [Microsoft.VSTS.Common.ResolvedReason],
+                   [System.CreatedDate], [System.ChangedDate]
+            FROM WorkItems 
+            WHERE [System.WorkItemType] = 'Bug'
+            AND [System.State] <> 'Removed'
+            ORDER BY [System.ChangedDate] DESC
+        """
+    }
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {pat}"
+    }
+    
+    try:
+        # Primero ejecutamos la query para obtener IDs
+        response = requests.post(url, json=wiql, headers=headers)
+        response.raise_for_status()
+        work_item_ids = [item["id"] for item in response.json().get("workItems", [])]
+        
+        if not work_item_ids:
+            return []
+        
+        # Obtenemos los detalles de cada work item
+        ids_str = ",".join(map(str, work_item_ids[:200]))  # Limitamos a 200 para no saturar
+        details_url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/workitems?ids={ids_str}&api-version=7.1"
+        
+        details_response = requests.get(details_url, headers=headers)
+        details_response.raise_for_status()
+        
+        incidencias = []
+        for item in details_response.json().get("value", []):
+            fields = item.get("fields", {})
+            incidencias.append({
+                "id": item["id"],
+                "titulo": fields.get("System.Title", "Sin título"),
+                "descripcion": fields.get("System.Description", "Sin descripción"),
+                "estado": fields.get("System.State", ""),
+                "tags": fields.get("System.Tags", ""),
+                "resolucion": fields.get("Microsoft.VSTS.Common.ResolvedReason", ""),
+                "fecha_creacion": fields.get("System.CreatedDate", ""),
+                "fecha_cambio": fields.get("System.ChangedDate", ""),
+                "url": item.get("url", "")
+            })
+        
+        return incidencias
+    
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error al conectar con Azure DevOps: {str(e)}")
+        return []
+
+def limpiar_html(texto):
+    """Limpia tags HTML básicos del texto"""
+    if not texto:
+        return ""
+    import re
+    texto = re.sub(r'<[^>]+>', ' ', texto)
+    texto = re.sub(r'\s+', ' ', texto)
+    return texto.strip()
+
+def generar_embeddings_incidencias(incidencias, modelo):
+    """
+    Genera embeddings para cada incidencia
+    """
+    textos = []
+    for inc in incidencias:
+        # Combinamos título, descripción y tags para el embedding
+        texto_completo = f"{inc['titulo']} {limpiar_html(inc['descripcion'])} {inc['tags']} {inc['resolucion']}"
+        textos.append(texto_completo)
+    
+    with st.spinner("🔄 Generando embeddings de incidencias..."):
+        embeddings = modelo.encode(textos, show_progress_bar=True)
+    
+    return np.array(embeddings)
+
+def buscar_incidencias_similares(query, incidencias, embeddings, modelo, top_k=5):
+    """
+    Busca las incidencias más similares a la query usando embeddings
+    """
+    query_embedding = modelo.encode([query])[0]
+    
+    # Calculamos similitud coseno
+    similitudes = np.dot(embeddings, query_embedding) / (
+        np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_embedding)
+    )
+    
+    # Obtenemos los índices de los top_k más similares
+    top_indices = np.argsort(similitudes)[-top_k:][::-1]
+    
+    resultados = []
+    for idx in top_indices:
+        resultados.append({
+            "incidencia": incidencias[idx],
+            "similitud": float(similitudes[idx])
+        })
+    
+    return resultados
+
+def construir_contexto_devops(incidencias_similares):
+    """
+    Construye el contexto para enviar a la IA con las incidencias encontradas
+    """
+    contexto = "**Incidencias similares encontradas en Azure DevOps:**\n\n"
+    
+    for i, resultado in enumerate(incidencias_similares, 1):
+        inc = resultado["incidencia"]
+        sim = resultado["similitud"]
+        
+        contexto += f"**Incidencia #{i}** (Similitud: {sim:.2%})\n"
+        contexto += f"- **ID**: {inc['id']}\n"
+        contexto += f"- **Título**: {inc['titulo']}\n"
+        contexto += f"- **Estado**: {inc['estado']}\n"
+        if inc['resolucion']:
+            contexto += f"- **Resolución**: {inc['resolucion']}\n"
+        contexto += f"- **Descripción**: {limpiar_html(inc['descripcion'])[:500]}...\n"
+        contexto += f"- **Tags**: {inc['tags']}\n\n"
+    
+    return contexto
 
 # ==================================================
 # SIDEBAR
@@ -239,7 +389,11 @@ prompt_template = st.sidebar.text_area("Contenido del template", get_template(te
 # ==================================================
 # TABS
 # ==================================================
-tab_chat, tab_repo = st.tabs(["💬 Chat clásico", "📦 Copiloto repositorio"])
+tab_chat, tab_repo, tab_devops = st.tabs([
+    "💬 Chat clásico", 
+    "📦 Copiloto repositorio",
+    "🎯 Consulta Tareas DevOps"
+])
 
 # ================= TAB 1: CHAT CLÁSICO =================
 with tab_chat:
@@ -269,14 +423,12 @@ with tab_repo:
         st.session_state.repo_tmpdir = tmp
         st.session_state.repo_tree = build_repo_tree(tmp.name)
 
-        # Botón para re-analizar con nuevo modelo/configuración
         if st.button("🔄 Analizar repositorio de nuevo"):
             st.session_state.repo_messages = []
             st.session_state.repo_memory_summary = ""
             st.session_state.analysis_cache = {}
             analizar_todo_repositorio(tmp.name)
         else:
-            # Analizar automáticamente la primera vez
             if not st.session_state.repo_memory_summary:
                 analizar_todo_repositorio(tmp.name)
 
@@ -285,7 +437,7 @@ with tab_repo:
     def render_tree(tree, base, rel=""):
         for k,v in tree.items():
             if v=="FILE":
-                st.text(f"📄 {rel}{k}")  # solo mostrar nombre de archivo
+                st.text(f"📄 {rel}{k}")
             else:
                 with st.expander(f"📁 {rel}{k}"):
                     render_tree(v, base, rel+ k + "/")
@@ -314,3 +466,171 @@ with tab_repo:
             st.session_state.repo_messages.append({"role":"user","content":repo_prompt})
             st.session_state.repo_messages.append({"role":"assistant","content":answer})
             st.rerun()
+
+# ================= TAB 3: CONSULTA TAREAS DEVOPS =================
+with tab_devops:
+    st.title("🎯 Consulta de Tareas Azure DevOps")
+    st.markdown("Pregunta sobre incidencias anteriores y encuentra soluciones similares usando IA")
+    
+    # Configuración de Azure DevOps
+    with st.expander("⚙️ Configuración Azure DevOps", expanded=not st.session_state.devops_indexed):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            org_input = st.text_input(
+                "Organización", 
+                value=st.session_state.devops_org,
+                placeholder="ej: softtek"
+            )
+            project_input = st.text_input(
+                "Proyecto", 
+                value=st.session_state.devops_project,
+                placeholder="ej: MiProyecto"
+            )
+        
+        with col2:
+            pat_input = st.text_input(
+                "Personal Access Token (PAT)", 
+                value=st.session_state.devops_pat,
+                type="password",
+                help="Crea un PAT en Azure DevOps con permisos de lectura en Work Items"
+            )
+            
+            st.markdown("---")
+            if st.button("🔄 Sincronizar e Indexar Incidencias", use_container_width=True):
+                if not org_input or not project_input or not pat_input:
+                    st.error("❌ Completa todos los campos de configuración")
+                else:
+                    st.session_state.devops_org = org_input
+                    st.session_state.devops_project = project_input
+                    st.session_state.devops_pat = pat_input
+                    
+                    # Obtener incidencias
+                    with st.spinner("📥 Obteniendo incidencias de Azure DevOps..."):
+                        incidencias = obtener_incidencias_devops(org_input, project_input, pat_input)
+                    
+                    if incidencias:
+                        st.success(f"✅ Se encontraron {len(incidencias)} incidencias")
+                        st.session_state.devops_incidencias = incidencias
+                        
+                        # Cargar modelo de embeddings
+                        if st.session_state.embedding_model is None:
+                            st.session_state.embedding_model = cargar_modelo_embeddings()
+                        
+                        # Generar embeddings
+                        embeddings = generar_embeddings_incidencias(
+                            incidencias, 
+                            st.session_state.embedding_model
+                        )
+                        st.session_state.devops_embeddings = embeddings
+                        st.session_state.devops_indexed = True
+                        
+                        st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ No se encontraron incidencias o hubo un error")
+    
+    # Mostrar estado de la indexación
+    if st.session_state.devops_indexed:
+        st.info(f"📊 **{len(st.session_state.devops_incidencias)} incidencias indexadas** y listas para consulta")
+    
+    # Chat de consultas
+    st.markdown("---")
+    
+    col_chat, col_stats = st.columns([2, 1])
+    
+    with col_stats:
+        st.subheader("📈 Estadísticas")
+        if st.session_state.devops_incidencias:
+            estados = {}
+            for inc in st.session_state.devops_incidencias:
+                estado = inc['estado']
+                estados[estado] = estados.get(estado, 0) + 1
+            
+            st.markdown("**Estados de incidencias:**")
+            for estado, count in estados.items():
+                st.metric(estado, count)
+        else:
+            st.info("Sincroniza primero las incidencias")
+    
+    with col_chat:
+        st.subheader("💬 Chat de consultas")
+        
+        # Mostrar mensajes anteriores
+        for m in st.session_state.devops_messages:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+        
+        # Input de consulta
+        if devops_query := st.chat_input(
+            "Pregunta sobre incidencias... ej: '¿Cómo se solucionó el error de login?'", 
+            key="devops_chat",
+            disabled=not st.session_state.devops_indexed
+        ):
+            if not st.session_state.devops_indexed:
+                st.warning("⚠️ Primero debes sincronizar e indexar las incidencias")
+            else:
+                # Añadir pregunta del usuario
+                st.session_state.devops_messages.append({"role": "user", "content": devops_query})
+                
+                # Buscar incidencias similares
+                with st.spinner("🔍 Buscando incidencias similares..."):
+                    resultados = buscar_incidencias_similares(
+                        devops_query,
+                        st.session_state.devops_incidencias,
+                        st.session_state.devops_embeddings,
+                        st.session_state.embedding_model,
+                        top_k=5
+                    )
+                
+                # Construir contexto para la IA
+                contexto = construir_contexto_devops(resultados)
+                
+                # Preparar prompt para Frida
+                system_prompt = """Eres un asistente técnico experto en analizar incidencias de software. 
+Tu tarea es ayudar a encontrar soluciones basándote en incidencias anteriores similares.
+
+Cuando respondas:
+1. Analiza las incidencias similares que se te proporcionan
+2. Si hay una coincidencia exacta o muy similar, explica cómo se resolvió
+3. Si no hay coincidencia exacta, propón soluciones basadas en los casos similares
+4. Sé específico y técnico en tus recomendaciones
+5. Menciona el ID de las incidencias relevantes para que el usuario pueda consultarlas"""
+
+                prompt_completo = f"{system_prompt}\n\n{contexto}\n\n**Consulta del usuario:** {devops_query}"
+                
+                # Llamar a Frida
+                payload = {
+                    "model": st.session_state.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"{contexto}\n\n**Consulta:** {devops_query}"}
+                    ]
+                }
+                
+                if st.session_state.include_temp:
+                    payload["temperature"] = st.session_state.temperature
+                if st.session_state.include_tokens:
+                    payload["max_tokens"] = st.session_state.max_tokens
+                
+                with st.spinner("🤖 Frida está analizando las incidencias..."):
+                    respuesta = call_ia(payload)
+                
+                # Añadir respuesta de la IA
+                st.session_state.devops_messages.append({"role": "assistant", "content": respuesta})
+                
+                # Mostrar las incidencias encontradas como referencia
+                with st.expander("📋 Ver incidencias similares encontradas"):
+                    for i, resultado in enumerate(resultados, 1):
+                        inc = resultado["incidencia"]
+                        sim = resultado["similitud"]
+                        
+                        st.markdown(f"### Incidencia {i} - ID: {inc['id']} (Similitud: {sim:.1%})")
+                        st.markdown(f"**Título:** {inc['titulo']}")
+                        st.markdown(f"**Estado:** {inc['estado']}")
+                        if inc['resolucion']:
+                            st.markdown(f"**Resolución:** {inc['resolucion']}")
+                        st.markdown(f"**Descripción:** {limpiar_html(inc['descripcion'])[:300]}...")
+                        st.markdown("---")
+                
+                st.rerun()
