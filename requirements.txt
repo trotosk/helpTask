@@ -1,2 +1,6 @@
 streamlit
+
 anthropic
+
+sentence-transformers==2.2.2
+numpy==1.24.3
