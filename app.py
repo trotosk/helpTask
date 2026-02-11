@@ -228,7 +228,7 @@ def cargar_modelo_embeddings():
     """Carga el modelo de embeddings una sola vez"""
     return SentenceTransformer('all-MiniLM-L6-v2')
 
-def obtener_incidencias_devops(organization, project, pat, area_path=None, work_item_types=None, max_items=200):
+def obtener_incidencias_devops(organization, project, pat, area_path=None, work_item_types=None, max_items=400):
     """
     Obtiene work items de Azure DevOps con filtros configurables
     """
@@ -538,7 +538,7 @@ st.session_state.model = st.sidebar.selectbox(
 st.session_state.include_temp = st.sidebar.checkbox("Incluir temperatura", value=True)
 st.session_state.temperature = st.sidebar.slider("Temperatura", 0.0, 1.0, 0.7, 0.1)
 st.session_state.include_tokens = st.sidebar.checkbox("Incluir max_tokens", value=True)
-st.session_state.max_tokens = st.sidebar.slider("Max tokens", 100, 4096, 1500, 100)
+st.session_state.max_tokens = st.sidebar.slider("Max tokens", 100, 4096, 3000, 100)
 
 template_type = st.sidebar.selectbox(
     "Tipo de prompt inicial",
@@ -748,7 +748,7 @@ with tab_devops:
                         st.warning("⚠️ No se encontraron work items o hubo un error")
         
         with col_btn2:
-            if st.button("🗑️ Limpiar", use_container_width=True):
+            if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_devops"):
                 st.session_state.devops_incidencias = []
                 st.session_state.devops_embeddings = None
                 st.session_state.devops_indexed = False
@@ -972,7 +972,7 @@ with tab_doc:
                         st.error("❌ No se pudo leer el contenido del documento")
         
         with col_btn2:
-            if st.button("🗑️ Limpiar", use_container_width=True):
+            if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_doc"):
                 st.session_state.doc_content = ""
                 st.session_state.doc_chunks = []
                 st.session_state.doc_embeddings = None
@@ -1161,3 +1161,4 @@ Genera el/los work item(s) solicitados siguiendo la plantilla proporcionada y ba
                         value=resultado_generacion,
                         height=300
                     )
+
