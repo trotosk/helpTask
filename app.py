@@ -92,7 +92,10 @@ defaults = {
     "doc_embeddings": None,
     "doc_indexed": False,
     "doc_filename": "",
-    "doc_top_k": 3
+    "doc_top_k": 3,
+    "temp_attachments": [],
+    "selected_attachment_url": "",
+    "selected_attachment_name": ""
 }
 
 for k, v in defaults.items():
@@ -347,6 +350,63 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
         if hasattr(e.response, 'text'):
             st.code(e.response.text[:500])
         return []
+
+def obtener_attachments_workitem(organization, project, pat, work_item_id):
+    """
+    Obtiene la lista de attachments de un work item
+    """
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/workitems/{work_item_id}?$expand=all&api-version=7.1"
+    
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        work_item = response.json()
+        relations = work_item.get("relations", [])
+        
+        attachments = []
+        for relation in relations:
+            if relation.get("rel") == "AttachedFile":
+                file_name = relation.get("attributes", {}).get("name", "Unknown")
+                # Solo incluir archivos .docx
+                if file_name.lower().endswith('.docx'):
+                    attachments.append({
+                        "url": relation.get("url"),
+                        "name": file_name
+                    })
+        
+        return attachments
+    
+    except Exception as e:
+        st.error(f"Error al obtener attachments: {str(e)}")
+        return []
+
+def descargar_attachment_devops(attachment_url, pat):
+    """
+    Descarga un attachment desde Azure DevOps
+    """
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+    
+    headers = {
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+    
+    try:
+        response = requests.get(attachment_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.content
+    except Exception as e:
+        st.error(f"Error al descargar attachment: {str(e)}")
+        return None
 
 def limpiar_html(texto):
     """Limpia tags HTML básicos del texto"""
@@ -885,10 +945,55 @@ with tab_doc:
             uploaded_doc = st.file_uploader(
                 "Sube un documento Word (.docx)", 
                 type=["docx"],
-                help="Archivo .docx desde tu ordenador"
+                help="Archivo .docx desde tu ordenador",
+                key="upload_doc_file"
             )
             
-            st.markdown("#### Opción 2: URL pública")
+            st.markdown("#### Opción 2: Desde Azure DevOps Work Item")
+            col_az1, col_az2 = st.columns(2)
+            
+            with col_az1:
+                workitem_id_input = st.number_input(
+                    "ID de Work Item",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                    help="ID del work item que contiene el documento adjunto"
+                )
+            
+            with col_az2:
+                if st.button("📋 Ver documentos adjuntos", disabled=(workitem_id_input == 0)):
+                    if not st.session_state.devops_pat:
+                        st.error("❌ Primero configura Azure DevOps en la pestaña 'Consulta Tareas'")
+                    else:
+                        with st.spinner("Obteniendo adjuntos..."):
+                            attachments = obtener_attachments_workitem(
+                                st.session_state.devops_org or "TelepizzaIT",
+                                st.session_state.devops_project or "Sales",
+                                st.session_state.devops_pat,
+                                int(workitem_id_input)
+                            )
+                        
+                        if attachments:
+                            st.session_state.temp_attachments = attachments
+                            st.success(f"✅ {len(attachments)} documento(s) .docx encontrado(s)")
+                        else:
+                            st.warning("⚠️ No se encontraron documentos .docx en este work item")
+            
+            # Mostrar lista de attachments si existen
+            if st.session_state.temp_attachments:
+                st.markdown("**Documentos Word encontrados:**")
+                selected_attachment = st.selectbox(
+                    "Selecciona un documento",
+                    options=range(len(st.session_state.temp_attachments)),
+                    format_func=lambda i: st.session_state.temp_attachments[i]["name"],
+                    key="selected_attachment_idx"
+                )
+                
+                st.session_state.selected_attachment_url = st.session_state.temp_attachments[selected_attachment]["url"]
+                st.session_state.selected_attachment_name = st.session_state.temp_attachments[selected_attachment]["name"]
+            
+            st.markdown("#### Opción 3: URL pública")
             doc_url = st.text_input(
                 "URL del documento",
                 placeholder="https://ejemplo.com/documento.docx",
@@ -920,21 +1025,38 @@ with tab_doc:
         col_btn1, col_btn2 = st.columns([3, 1])
         
         with col_btn1:
-            if st.button("🔄 Procesar Documento", use_container_width=True):
+            if st.button("🔄 Procesar Documento", use_container_width=True, key="procesar_doc_btn"):
                 doc_bytes = None
                 filename = ""
                 
-                # Determinar fuente del documento
+                # Opción 1: Archivo local
                 if uploaded_doc is not None:
                     doc_bytes = uploaded_doc.read()
                     filename = uploaded_doc.name
                     st.info(f"📄 Procesando: {filename}")
+                
+                # Opción 2: Desde Azure DevOps
+                elif st.session_state.selected_attachment_url:
+                    if not st.session_state.devops_pat:
+                        st.error("❌ Configura Azure DevOps primero")
+                    else:
+                        with st.spinner("📥 Descargando desde Azure DevOps..."):
+                            doc_bytes = descargar_attachment_devops(
+                                st.session_state.selected_attachment_url,
+                                st.session_state.devops_pat
+                            )
+                        filename = st.session_state.selected_attachment_name
+                        if doc_bytes:
+                            st.info(f"📄 Procesando: {filename}")
+                
+                # Opción 3: URL pública
                 elif doc_url:
                     with st.spinner("📥 Descargando documento desde URL..."):
                         doc_bytes = descargar_documento_url(doc_url)
-                        filename = doc_url.split("/")[-1]
+                    filename = doc_url.split("/")[-1]
+                
                 else:
-                    st.error("❌ Debes subir un archivo o proporcionar una URL")
+                    st.error("❌ Debes subir un archivo, seleccionar uno de Azure DevOps o proporcionar una URL")
                 
                 if doc_bytes:
                     # Leer contenido
@@ -966,6 +1088,11 @@ with tab_doc:
                         st.session_state.doc_filename = filename
                         st.session_state.doc_top_k = doc_top_k
                         
+                        # Limpiar attachments temporales
+                        st.session_state.temp_attachments = []
+                        st.session_state.selected_attachment_url = ""
+                        st.session_state.selected_attachment_name = ""
+                        
                         st.success("✅ Documento indexado. Ya puedes hacer consultas o generar work items.")
                         st.rerun()
                     else:
@@ -979,6 +1106,9 @@ with tab_doc:
                 st.session_state.doc_indexed = False
                 st.session_state.doc_messages = []
                 st.session_state.doc_filename = ""
+                st.session_state.temp_attachments = []
+                st.session_state.selected_attachment_url = ""
+                st.session_state.selected_attachment_name = ""
                 st.success("✅ Documento eliminado")
                 st.rerun()
     
@@ -1161,4 +1291,3 @@ Genera el/los work item(s) solicitados siguiendo la plantilla proporcionada y ba
                         value=resultado_generacion,
                         height=300
                     )
-
