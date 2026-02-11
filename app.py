@@ -9,6 +9,8 @@ import json
 from datetime import datetime
 import numpy as np
 from sentence_transformers import SentenceTransformer
+import docx
+from io import BytesIO
 
 # ==================================================
 # USUARIOS FIJOS
@@ -69,12 +71,13 @@ defaults = {
     "messages": [],
     "repo_messages": [],
     "devops_messages": [],
+    "doc_messages": [],
     "repo_memory_summary": "",
     "memory_summary": "",
     "repo_tree": {},
     "repo_tmpdir": None,
     "analysis_cache": {},
-    # Nuevo estado para DevOps
+    # Estado para DevOps
     "devops_incidencias": [],
     "devops_embeddings": None,
     "devops_indexed": False,
@@ -82,7 +85,14 @@ defaults = {
     "devops_org": "",
     "devops_project": "",
     "devops_pat": "",
-    "devops_top_k": 5
+    "devops_top_k": 5,
+    # Nuevo estado para Documentos
+    "doc_content": "",
+    "doc_chunks": [],
+    "doc_embeddings": None,
+    "doc_indexed": False,
+    "doc_filename": "",
+    "doc_top_k": 3
 }
 
 for k, v in defaults.items():
@@ -405,6 +415,103 @@ def construir_contexto_devops(incidencias_similares):
     return contexto
 
 # ==================================================
+# HELPERS PARA DOCUMENTOS
+# ==================================================
+
+def leer_docx_desde_bytes(file_bytes):
+    """Lee un documento Word desde bytes"""
+    try:
+        doc = docx.Document(BytesIO(file_bytes))
+        texto_completo = []
+        
+        for para in doc.paragraphs:
+            if para.text.strip():
+                texto_completo.append(para.text.strip())
+        
+        # También extraer texto de tablas
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    if cell.text.strip():
+                        texto_completo.append(cell.text.strip())
+        
+        return "\n\n".join(texto_completo)
+    except Exception as e:
+        st.error(f"Error al leer documento: {str(e)}")
+        return ""
+
+def descargar_documento_url(url):
+    """Descarga un documento desde una URL pública"""
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        return response.content
+    except Exception as e:
+        st.error(f"Error al descargar documento: {str(e)}")
+        return None
+
+def dividir_en_chunks(texto, chunk_size=1000):
+    """Divide el texto en fragmentos para embeddings"""
+    # Dividir por párrafos primero
+    paragrafos = [p.strip() for p in texto.split('\n\n') if p.strip()]
+    
+    chunks = []
+    chunk_actual = ""
+    
+    for para in paragrafos:
+        if len(chunk_actual) + len(para) < chunk_size:
+            chunk_actual += para + "\n\n"
+        else:
+            if chunk_actual:
+                chunks.append(chunk_actual.strip())
+            chunk_actual = para + "\n\n"
+    
+    if chunk_actual:
+        chunks.append(chunk_actual.strip())
+    
+    return chunks
+
+def generar_embeddings_documento(chunks, modelo):
+    """Genera embeddings para los chunks del documento"""
+    with st.spinner("🔄 Generando embeddings del documento..."):
+        embeddings = modelo.encode(chunks, show_progress_bar=True)
+    return np.array(embeddings)
+
+def buscar_chunks_similares(query, chunks, embeddings, modelo, top_k=3):
+    """Busca los chunks más relevantes del documento"""
+    query_embedding = modelo.encode([query])[0]
+    
+    similitudes = np.dot(embeddings, query_embedding) / (
+        np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_embedding)
+    )
+    
+    top_indices = np.argsort(similitudes)[-top_k:][::-1]
+    
+    resultados = []
+    for idx in top_indices:
+        resultados.append({
+            "chunk": chunks[idx],
+            "similitud": float(similitudes[idx]),
+            "indice": idx
+        })
+    
+    return resultados
+
+def construir_contexto_documento(chunks_similares):
+    """Construye el contexto para enviar a Frida con los chunks relevantes"""
+    contexto = "**Fragmentos relevantes del documento:**\n\n"
+    
+    for i, resultado in enumerate(chunks_similares, 1):
+        sim = resultado["similitud"]
+        chunk = resultado["chunk"]
+        
+        contexto += f"**Fragmento #{i}** (Relevancia: {sim:.2%})\n"
+        contexto += f"{chunk}\n\n"
+        contexto += "---\n\n"
+    
+    return contexto
+
+# ==================================================
 # SIDEBAR
 # ==================================================
 st.sidebar.title("⚙️ Configuración")
@@ -447,10 +554,11 @@ prompt_template = st.sidebar.text_area("Contenido del template", get_template(te
 # ==================================================
 # TABS
 # ==================================================
-tab_chat, tab_repo, tab_devops = st.tabs([
+tab_chat, tab_repo, tab_devops, tab_doc = st.tabs([
     "💬 Chat clásico", 
     "📦 Copiloto repositorio",
-    "🎯 Consulta Tareas DevOps"
+    "🎯 Consulta Tareas DevOps",
+    "📄 Análisis Documentos"
 ])
 
 # ================= TAB 1: CHAT CLÁSICO =================
@@ -762,3 +870,294 @@ Cuando respondas:
                         st.markdown("---")
                 
                 st.rerun()
+
+# ================= TAB 4: ANÁLISIS DOCUMENTOS =================
+with tab_doc:
+    st.title("📄 Análisis de Documentos")
+    st.markdown("Carga un documento Word y haz preguntas sobre su contenido o genera work items automáticamente")
+    
+    # Configuración del documento
+    with st.expander("📥 Cargar Documento", expanded=not st.session_state.doc_indexed):
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("#### Opción 1: Subir archivo local")
+            uploaded_doc = st.file_uploader(
+                "Sube un documento Word (.docx)", 
+                type=["docx"],
+                help="Archivo .docx desde tu ordenador"
+            )
+            
+            st.markdown("#### Opción 2: URL pública")
+            doc_url = st.text_input(
+                "URL del documento",
+                placeholder="https://ejemplo.com/documento.docx",
+                help="URL de acceso público a un archivo .docx"
+            )
+        
+        with col2:
+            st.markdown("#### ⚙️ Configuración")
+            chunk_size = st.slider(
+                "Tamaño de fragmentos",
+                min_value=500,
+                max_value=2000,
+                value=1000,
+                step=100,
+                help="Tamaño de cada fragmento del documento"
+            )
+            
+            doc_top_k = st.slider(
+                "Fragmentos relevantes",
+                min_value=2,
+                max_value=5,
+                value=3,
+                step=1,
+                help="Número de fragmentos a usar como contexto"
+            )
+        
+        st.markdown("---")
+        
+        col_btn1, col_btn2 = st.columns([3, 1])
+        
+        with col_btn1:
+            if st.button("🔄 Procesar Documento", use_container_width=True):
+                doc_bytes = None
+                filename = ""
+                
+                # Determinar fuente del documento
+                if uploaded_doc is not None:
+                    doc_bytes = uploaded_doc.read()
+                    filename = uploaded_doc.name
+                    st.info(f"📄 Procesando: {filename}")
+                elif doc_url:
+                    with st.spinner("📥 Descargando documento desde URL..."):
+                        doc_bytes = descargar_documento_url(doc_url)
+                        filename = doc_url.split("/")[-1]
+                else:
+                    st.error("❌ Debes subir un archivo o proporcionar una URL")
+                
+                if doc_bytes:
+                    # Leer contenido
+                    with st.spinner("📖 Leyendo contenido del documento..."):
+                        contenido = leer_docx_desde_bytes(doc_bytes)
+                    
+                    if contenido:
+                        st.success(f"✅ Documento leído: {len(contenido)} caracteres")
+                        
+                        # Dividir en chunks
+                        chunks = dividir_en_chunks(contenido, chunk_size=chunk_size)
+                        st.info(f"📑 Dividido en {len(chunks)} fragmentos")
+                        
+                        # Cargar modelo si no está cargado
+                        if st.session_state.embedding_model is None:
+                            st.session_state.embedding_model = cargar_modelo_embeddings()
+                        
+                        # Generar embeddings
+                        embeddings = generar_embeddings_documento(
+                            chunks,
+                            st.session_state.embedding_model
+                        )
+                        
+                        # Guardar en session_state
+                        st.session_state.doc_content = contenido
+                        st.session_state.doc_chunks = chunks
+                        st.session_state.doc_embeddings = embeddings
+                        st.session_state.doc_indexed = True
+                        st.session_state.doc_filename = filename
+                        st.session_state.doc_top_k = doc_top_k
+                        
+                        st.success("✅ Documento indexado. Ya puedes hacer consultas o generar work items.")
+                        st.rerun()
+                    else:
+                        st.error("❌ No se pudo leer el contenido del documento")
+        
+        with col_btn2:
+            if st.button("🗑️ Limpiar", use_container_width=True):
+                st.session_state.doc_content = ""
+                st.session_state.doc_chunks = []
+                st.session_state.doc_embeddings = None
+                st.session_state.doc_indexed = False
+                st.session_state.doc_messages = []
+                st.session_state.doc_filename = ""
+                st.success("✅ Documento eliminado")
+                st.rerun()
+    
+    # Estado del documento
+    if st.session_state.doc_indexed:
+        st.info(f"📄 **Documento cargado**: {st.session_state.doc_filename} ({len(st.session_state.doc_chunks)} fragmentos)")
+        st.info(f"🎯 **Fragmentos por consulta**: {st.session_state.get('doc_top_k', 3)}")
+    
+    st.markdown("---")
+    
+    # Pestañas de funcionalidad
+    subtab_chat, subtab_generate = st.tabs(["💬 Consultas", "🔧 Generar Work Items"])
+    
+    # SUBTAB: Consultas sobre el documento
+    with subtab_chat:
+        st.subheader("💬 Haz preguntas sobre el documento")
+        
+        for m in st.session_state.doc_messages:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+        
+        if doc_query := st.chat_input(
+            "Pregunta sobre el documento... ej: '¿Cuáles son los requisitos principales?'",
+            key="doc_chat",
+            disabled=not st.session_state.doc_indexed
+        ):
+            if not st.session_state.doc_indexed:
+                st.warning("⚠️ Primero debes cargar y procesar un documento")
+            else:
+                st.session_state.doc_messages.append({"role": "user", "content": doc_query})
+                
+                top_k = st.session_state.get('doc_top_k', 3)
+                
+                # Buscar fragmentos relevantes
+                with st.spinner(f"🔍 Buscando fragmentos relevantes..."):
+                    resultados = buscar_chunks_similares(
+                        doc_query,
+                        st.session_state.doc_chunks,
+                        st.session_state.doc_embeddings,
+                        st.session_state.embedding_model,
+                        top_k=top_k
+                    )
+                
+                # Construir contexto
+                contexto = construir_contexto_documento(resultados)
+                
+                # Llamar a Frida
+                system_prompt = """Eres un asistente experto en analizar documentos técnicos y de negocio.
+
+Cuando respondas:
+1. Basa tu respuesta SOLO en la información de los fragmentos proporcionados
+2. Si la información no está en los fragmentos, di que no está disponible en el documento
+3. Sé preciso y cita partes específicas cuando sea relevante
+4. Estructura tu respuesta de forma clara y concisa"""
+
+                payload = {
+                    "model": st.session_state.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"{contexto}\n\n**Pregunta:** {doc_query}"}
+                    ]
+                }
+                
+                if st.session_state.include_temp:
+                    payload["temperature"] = st.session_state.temperature
+                if st.session_state.include_tokens:
+                    payload["max_tokens"] = st.session_state.max_tokens
+                
+                with st.spinner("🤖 Frida está analizando el documento..."):
+                    respuesta = call_ia(payload)
+                
+                st.session_state.doc_messages.append({"role": "assistant", "content": respuesta})
+                
+                # Mostrar fragmentos usados
+                with st.expander(f"📋 Ver fragmentos utilizados"):
+                    for i, resultado in enumerate(resultados, 1):
+                        sim = resultado["similitud"]
+                        chunk = resultado["chunk"]
+                        
+                        st.markdown(f"### Fragmento {i} (Relevancia: {sim:.1%})")
+                        st.text(chunk[:500] + ("..." if len(chunk) > 500 else ""))
+                        st.markdown("---")
+                
+                st.rerun()
+    
+    # SUBTAB: Generar work items
+    with subtab_generate:
+        st.subheader("🔧 Generar Work Items desde el Documento")
+        
+        if not st.session_state.doc_indexed:
+            st.warning("⚠️ Primero debes cargar y procesar un documento")
+        else:
+            col_gen1, col_gen2 = st.columns([2, 1])
+            
+            with col_gen1:
+                instruccion_generacion = st.text_area(
+                    "Instrucciones de generación",
+                    placeholder="Ej: Genera una épica principal con 3 historias de usuario basándote en los requisitos del documento",
+                    height=100
+                )
+            
+            with col_gen2:
+                template_generacion = st.selectbox(
+                    "Template a usar",
+                    [
+                        "PO Definicion epica",
+                        "PO Definicion epica una historia",
+                        "PO Definicion historia",
+                        "PO Casos exito",
+                        "PO Definicion mejora tecnica",
+                        "PO Definicion spike"
+                    ]
+                )
+                
+                usar_todo_doc = st.checkbox(
+                    "Usar documento completo",
+                    value=False,
+                    help="Si está marcado, usa todo el documento. Si no, solo fragmentos relevantes"
+                )
+            
+            if st.button("✨ Generar Work Items", use_container_width=True):
+                if not instruccion_generacion:
+                    st.error("❌ Debes proporcionar instrucciones de generación")
+                else:
+                    # Decidir contexto
+                    if usar_todo_doc:
+                        contexto_doc = f"**Documento completo:**\n\n{st.session_state.doc_content[:10000]}"
+                        if len(st.session_state.doc_content) > 10000:
+                            contexto_doc += "\n\n[Documento truncado por longitud]"
+                    else:
+                        # Buscar fragmentos relevantes según instrucción
+                        with st.spinner("🔍 Buscando fragmentos relevantes..."):
+                            resultados = buscar_chunks_similares(
+                                instruccion_generacion,
+                                st.session_state.doc_chunks,
+                                st.session_state.doc_embeddings,
+                                st.session_state.embedding_model,
+                                top_k=st.session_state.get('doc_top_k', 3)
+                            )
+                        contexto_doc = construir_contexto_documento(resultados)
+                    
+                    # Obtener template
+                    template_content = get_template(template_generacion)
+                    
+                    # Preparar prompt combinado
+                    prompt_final = f"""Contexto del documento:
+{contexto_doc}
+
+Instrucciones:
+{instruccion_generacion}
+
+Plantilla a seguir:
+{template_content}
+
+Genera el/los work item(s) solicitados siguiendo la plantilla proporcionada y basándote en el contenido del documento."""
+                    
+                    payload = {
+                        "model": st.session_state.model,
+                        "messages": [
+                            {"role": "user", "content": prompt_final}
+                        ]
+                    }
+                    
+                    if st.session_state.include_temp:
+                        payload["temperature"] = st.session_state.temperature
+                    if st.session_state.include_tokens:
+                        payload["max_tokens"] = st.session_state.max_tokens
+                    
+                    with st.spinner("🤖 Frida está generando los work items..."):
+                        resultado_generacion = call_ia(payload)
+                    
+                    # Mostrar resultado
+                    st.success("✅ Work items generados")
+                    st.markdown("### Resultado:")
+                    st.markdown(resultado_generacion)
+                    
+                    # Botón para copiar
+                    st.text_area(
+                        "Copiar resultado",
+                        value=resultado_generacion,
+                        height=300
+                    )
