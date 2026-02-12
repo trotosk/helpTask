@@ -515,6 +515,22 @@ def obtener_wikis_proyecto(organization, project, pat):
 
     try:
         response = requests.get(url, headers=headers, timeout=30)
+
+        if response.status_code == 401:
+            st.error("❌ Error 401: No autorizado para acceder a las Wikis")
+            st.warning("""
+            **El PAT necesita estos permisos:**
+            - ✅ **Wiki (Read)** - Para leer wikis
+            - O alternativamente: **Code (Read)** - Da acceso a repos y wikis
+
+            **Pasos para verificar/añadir permisos:**
+            1. Ve a Azure DevOps → User Settings → Personal Access Tokens
+            2. Edita tu PAT o crea uno nuevo
+            3. En los scopes, selecciona: **Wiki (Read)** o **Code (Read)**
+            4. Guarda y usa el nuevo PAT en la configuración
+            """)
+            return []
+
         response.raise_for_status()
 
         wikis_data = response.json()
@@ -527,8 +543,14 @@ def obtener_wikis_proyecto(organization, project, pat):
             "url": wiki.get("url")
         } for wiki in wikis]
 
+    except requests.exceptions.RequestException as e:
+        if hasattr(e, 'response') and e.response is not None:
+            st.error(f"❌ Error HTTP {e.response.status_code}: {str(e)}")
+        else:
+            st.error(f"❌ Error de conexión: {str(e)}")
+        return []
     except Exception as e:
-        st.error(f"Error al obtener wikis: {str(e)}")
+        st.error(f"❌ Error inesperado: {str(e)}")
         return []
 
 def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1):
@@ -548,6 +570,12 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
 
     try:
         response = requests.get(url, headers=headers, timeout=30)
+
+        if response.status_code == 401:
+            st.error("❌ Error 401: No autorizado para acceder a las páginas de la Wiki")
+            st.info("Verifica que tu PAT tenga permisos de **Wiki (Read)** o **Code (Read)**")
+            return []
+
         response.raise_for_status()
 
         data = response.json()
@@ -580,8 +608,14 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
 
         return []
 
+    except requests.exceptions.RequestException as e:
+        if hasattr(e, 'response') and e.response is not None:
+            st.error(f"❌ Error HTTP {e.response.status_code}: {str(e)}")
+        else:
+            st.error(f"❌ Error de conexión: {str(e)}")
+        return []
     except Exception as e:
-        st.error(f"Error al obtener páginas de la wiki: {str(e)}")
+        st.error(f"❌ Error inesperado al obtener páginas: {str(e)}")
         return []
 
 def obtener_contenido_pagina_wiki(organization, project, pat, wiki_id, page_id):
@@ -601,6 +635,12 @@ def obtener_contenido_pagina_wiki(organization, project, pat, wiki_id, page_id):
 
     try:
         response = requests.get(url, headers=headers, timeout=30)
+
+        if response.status_code == 401:
+            st.error(f"❌ Error 401: No autorizado para acceder al contenido de la página")
+            st.info("Verifica que tu PAT tenga permisos de **Wiki (Read)** o **Code (Read)**")
+            return None
+
         response.raise_for_status()
 
         data = response.json()
@@ -612,8 +652,14 @@ def obtener_contenido_pagina_wiki(organization, project, pat, wiki_id, page_id):
             "gitItemPath": data.get("gitItemPath", "")
         }
 
+    except requests.exceptions.RequestException as e:
+        if hasattr(e, 'response') and e.response is not None:
+            st.error(f"❌ Error HTTP {e.response.status_code} al obtener contenido")
+        else:
+            st.error(f"❌ Error de conexión: {str(e)}")
+        return None
     except Exception as e:
-        st.error(f"Error al obtener contenido de página: {str(e)}")
+        st.error(f"❌ Error inesperado al obtener contenido: {str(e)}")
         return None
 
 def limpiar_markdown(texto):
@@ -782,21 +828,38 @@ with tab_devops:
         with col1:
             st.markdown("#### 🔗 Conexión")
             org_input = st.text_input(
-                "Organización", 
+                "Organización",
                 value=st.session_state.devops_org if st.session_state.devops_org else "TelepizzaIT",
                 placeholder="ej: TelepizzaIT"
             )
             project_input = st.text_input(
-                "Proyecto", 
+                "Proyecto",
                 value=st.session_state.devops_project if st.session_state.devops_project else "Sales",
                 placeholder="ej: Sales"
             )
             pat_input = st.text_input(
-                "Personal Access Token (PAT)", 
+                "Personal Access Token (PAT)",
                 value=st.session_state.devops_pat,
                 type="password",
-                help="PAT con permisos de lectura en Work Items"
+                help="PAT con permisos: Work Items (Read) + Wiki (Read) o Code (Read)"
             )
+
+            # Información sobre permisos necesarios
+            with st.expander("ℹ️ Permisos necesarios del PAT"):
+                st.markdown("""
+                **Para Work Items:**
+                - ✅ Work Items (Read)
+
+                **Para Wiki:**
+                - ✅ Wiki (Read)
+                - O alternativamente: Code (Read)
+
+                **Cómo crear/editar un PAT:**
+                1. Azure DevOps → User Settings (arriba derecha) → Personal Access Tokens
+                2. New Token o edita uno existente
+                3. Selecciona los scopes necesarios
+                4. Copia el token y pégalo arriba
+                """)
         
         with col2:
             st.markdown("#### 🎛️ Filtros")
