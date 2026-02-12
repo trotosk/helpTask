@@ -69,14 +69,10 @@ TOKEN = os.getenv("IA_TOKEN")
 # ==================================================
 defaults = {
     "messages": [],
-    "repo_messages": [],
     "devops_messages": [],
     "doc_messages": [],
-    "repo_memory_summary": "",
+    "wiki_messages": [],
     "memory_summary": "",
-    "repo_tree": {},
-    "repo_tmpdir": None,
-    "analysis_cache": {},
     # Estado para DevOps
     "devops_incidencias": [],
     "devops_embeddings": None,
@@ -86,7 +82,7 @@ defaults = {
     "devops_project": "",
     "devops_pat": "",
     "devops_top_k": 5,
-    # Nuevo estado para Documentos
+    # Estado para Documentos
     "doc_content": "",
     "doc_chunks": [],
     "doc_embeddings": None,
@@ -95,7 +91,16 @@ defaults = {
     "doc_top_k": 3,
     "temp_attachments": [],
     "selected_attachment_url": "",
-    "selected_attachment_name": ""
+    "selected_attachment_name": "",
+    # Estado para Wiki
+    "wiki_paginas_contenido": [],
+    "wiki_embeddings": None,
+    "wiki_referencias": [],
+    "wiki_chunks": [],
+    "wiki_indexed": False,
+    "wiki_top_k": 5,
+    "selected_wiki_id": "",
+    "selected_wiki_name": ""
 }
 
 for k, v in defaults.items():
@@ -140,87 +145,6 @@ def resumir_conversacion(messages):
         {"role": "user", "content": "\n".join(f"{m['role']}: {m['content']}" for m in messages)}
     ]
     return call_ia({"model": st.session_state.model, "messages": resumen_prompt})
-
-def extract_zip(uploaded_zip):
-    tmp = tempfile.TemporaryDirectory()
-    zip_path = Path(tmp.name) / uploaded_zip.name
-    with open(zip_path, "wb") as f:
-        f.write(uploaded_zip.read())
-    with zipfile.ZipFile(zip_path) as z:
-        z.extractall(tmp.name)
-    return tmp
-
-def build_repo_tree(base_path):
-    tree = {}
-    IGNORED_DIRS = [".git", "node_modules", "venv", "__pycache__", "dist", "build", ".idea", ".vscode"]
-    CODE_EXTENSIONS = (".py", ".js", ".ts", ".java", ".go", ".cs", ".rb", ".php")
-    for root, dirs, files in os.walk(base_path):
-        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
-        rel = os.path.relpath(root, base_path)
-        node = tree
-        if rel != ".":
-            for part in rel.split(os.sep):
-                node = node.setdefault(part, {})
-        for f in files:
-            if f.endswith(CODE_EXTENSIONS):
-                node[f] = "FILE"
-    return tree
-
-def analizar_archivo(filepath, progress_bar=None, current_count=None, total_files=None):
-    if filepath in st.session_state.analysis_cache:
-        return st.session_state.analysis_cache[filepath]
-
-    with open(filepath, encoding="utf-8", errors="ignore") as f:
-        code = f.read()
-    fragments = [code[i:i+CHUNK_SIZE] for i in range(0, len(code), CHUNK_SIZE)]
-    analysis_full = ""
-    for fragment in fragments:
-        payload = {
-            "model": st.session_state.model,
-            "messages": [
-                {"role": "system", "content": "Analiza este fragmento de código y explica responsabilidades y dependencias."},
-                {"role": "user", "content": fragment}
-            ]
-        }
-        if st.session_state.include_temp:
-            payload["temperature"] = st.session_state.temperature
-        if st.session_state.include_tokens:
-            payload["max_tokens"] = st.session_state.max_tokens
-        with st.spinner("🤖 La IA está pensando..."):
-            fragment_analysis = call_ia(payload)
-        analysis_full += fragment_analysis + "\n"
-        st.session_state.repo_messages.append({"role": "assistant", "content": fragment_analysis})
-
-    st.session_state.analysis_cache[filepath] = analysis_full
-
-    if len(st.session_state.repo_messages) > 10:
-        st.session_state.repo_memory_summary = resumir_conversacion(st.session_state.repo_messages[-10:])
-        st.session_state.repo_messages = st.session_state.repo_messages[-10:]
-
-    if progress_bar and current_count is not None and total_files:
-        progress_bar.progress(current_count / total_files)
-
-    return analysis_full
-
-def analizar_todo_repositorio(base_path):
-    st.info("Analizando todos los archivos del repositorio... esto puede tardar")
-    CODE_EXTENSIONS = (".py", ".js", ".ts", ".java", ".go", ".cs", ".rb", ".php")
-    files_to_analyze = []
-    for root, dirs, files in os.walk(base_path):
-        for file in files:
-            if file.endswith(CODE_EXTENSIONS):
-                files_to_analyze.append(os.path.join(root, file))
-
-    progress_bar = st.progress(0)
-    total_files = len(files_to_analyze)
-    for idx, filepath in enumerate(files_to_analyze, start=1):
-        analizar_archivo(filepath, progress_bar=progress_bar, current_count=idx, total_files=total_files)
-    st.success("✅ Análisis completo realizado. Ahora puedes preguntar sobre el repositorio.")
-
-def build_repo_context():
-    if st.session_state.repo_memory_summary:
-        return [{"role":"system","content":st.session_state.repo_memory_summary}]
-    return []
 
 # ==================================================
 # HELPERS PARA AZURE DEVOPS
@@ -572,6 +496,213 @@ def construir_contexto_documento(chunks_similares):
     return contexto
 
 # ==================================================
+# HELPERS PARA AZURE DEVOPS WIKI
+# ==================================================
+
+def obtener_wikis_proyecto(organization, project, pat):
+    """
+    Obtiene la lista de wikis disponibles en el proyecto
+    """
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis?api-version=7.1"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        wikis_data = response.json()
+        wikis = wikis_data.get("value", [])
+
+        return [{
+            "id": wiki.get("id"),
+            "name": wiki.get("name"),
+            "type": wiki.get("type"),
+            "url": wiki.get("url")
+        } for wiki in wikis]
+
+    except Exception as e:
+        st.error(f"Error al obtener wikis: {str(e)}")
+        return []
+
+def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1):
+    """
+    Obtiene la lista de páginas de una wiki
+    recursion_level=1 muestra la estructura completa
+    """
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?recursionLevel={recursion_level}&api-version=7.1"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        data = response.json()
+
+        # Función recursiva para aplanar la estructura de páginas
+        def aplanar_paginas(page, path=""):
+            paginas = []
+            current_path = f"{path}/{page.get('path', '')}" if path else page.get('path', '')
+
+            # Solo añadir si tiene ID (las páginas reales tienen ID)
+            if page.get('id'):
+                paginas.append({
+                    "id": page.get("id"),
+                    "path": current_path,
+                    "order": page.get("order", 0),
+                    "gitItemPath": page.get("gitItemPath", ""),
+                    "url": page.get("url", "")
+                })
+
+            # Procesar subpáginas
+            if "subPages" in page:
+                for subpage in page["subPages"]:
+                    paginas.extend(aplanar_paginas(subpage, current_path))
+
+            return paginas
+
+        # Si hay páginas, aplanarlas
+        if "id" in data:
+            return aplanar_paginas(data)
+
+        return []
+
+    except Exception as e:
+        st.error(f"Error al obtener páginas de la wiki: {str(e)}")
+        return []
+
+def obtener_contenido_pagina_wiki(organization, project, pat, wiki_id, page_id):
+    """
+    Obtiene el contenido de una página específica de la wiki
+    """
+    # Usar el page_id directamente en la URL con includeContent=true
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages/{page_id}?includeContent=true&api-version=7.1"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        data = response.json()
+
+        return {
+            "id": data.get("id"),
+            "path": data.get("path"),
+            "content": data.get("content", ""),
+            "gitItemPath": data.get("gitItemPath", "")
+        }
+
+    except Exception as e:
+        st.error(f"Error al obtener contenido de página: {str(e)}")
+        return None
+
+def limpiar_markdown(texto):
+    """
+    Limpia tags markdown y deja texto limpio
+    """
+    if not texto:
+        return ""
+    import re
+    # Eliminar bloques de código
+    texto = re.sub(r'```[\s\S]*?```', '', texto)
+    # Eliminar código inline
+    texto = re.sub(r'`[^`]+`', '', texto)
+    # Eliminar imágenes
+    texto = re.sub(r'!\[.*?\]\(.*?\)', '', texto)
+    # Eliminar links pero mantener texto
+    texto = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', texto)
+    # Eliminar headers markdown
+    texto = re.sub(r'^#+\s+', '', texto, flags=re.MULTILINE)
+    # Eliminar énfasis
+    texto = re.sub(r'[*_]{1,2}([^*_]+)[*_]{1,2}', r'\1', texto)
+    # Limpiar espacios múltiples
+    texto = re.sub(r'\s+', ' ', texto)
+    return texto.strip()
+
+def generar_embeddings_wiki(paginas_contenido, modelo):
+    """
+    Genera embeddings para las páginas de la wiki
+    paginas_contenido: lista de dict con 'path', 'chunks', etc.
+    """
+    todos_chunks = []
+    referencias = []  # Para mantener referencia de página y chunk
+
+    for pagina in paginas_contenido:
+        for idx, chunk in enumerate(pagina['chunks']):
+            todos_chunks.append(chunk)
+            referencias.append({
+                'path': pagina['path'],
+                'chunk_idx': idx,
+                'page_id': pagina['id']
+            })
+
+    with st.spinner("🔄 Generando embeddings de páginas Wiki..."):
+        embeddings = modelo.encode(todos_chunks, show_progress_bar=True)
+
+    return np.array(embeddings), referencias
+
+def buscar_chunks_wiki_similares(query, chunks, embeddings, referencias, modelo, top_k=5):
+    """
+    Busca los chunks más relevantes de las páginas Wiki
+    """
+    query_embedding = modelo.encode([query])[0]
+
+    similitudes = np.dot(embeddings, query_embedding) / (
+        np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_embedding)
+    )
+
+    top_indices = np.argsort(similitudes)[-top_k:][::-1]
+
+    resultados = []
+    for idx in top_indices:
+        resultados.append({
+            "chunk": chunks[idx],
+            "similitud": float(similitudes[idx]),
+            "path": referencias[idx]['path'],
+            "page_id": referencias[idx]['page_id'],
+            "chunk_idx": referencias[idx]['chunk_idx']
+        })
+
+    return resultados
+
+def construir_contexto_wiki(chunks_similares):
+    """
+    Construye el contexto para enviar a Frida con los chunks relevantes de la Wiki
+    """
+    contexto = "**Fragmentos relevantes de la Wiki de Azure DevOps:**\n\n"
+
+    for i, resultado in enumerate(chunks_similares, 1):
+        sim = resultado["similitud"]
+        chunk = resultado["chunk"]
+        path = resultado["path"]
+
+        contexto += f"**Página: {path}** - Fragmento #{i} (Relevancia: {sim:.2%})\n"
+        contexto += f"{chunk}\n\n"
+        contexto += "---\n\n"
+
+    return contexto
+
+# ==================================================
 # SIDEBAR
 # ==================================================
 st.sidebar.title("⚙️ Configuración")
@@ -614,9 +745,8 @@ prompt_template = st.sidebar.text_area("Contenido del template", get_template(te
 # ==================================================
 # TABS
 # ==================================================
-tab_chat, tab_repo, tab_devops, tab_doc = st.tabs([
-    "💬 Chat clásico", 
-    "📦 Copiloto repositorio",
+tab_chat, tab_devops, tab_doc = st.tabs([
+    "💬 Chat clásico",
     "🎯 Consulta Tareas DevOps",
     "📄 Análisis Documentos"
 ])
@@ -640,66 +770,13 @@ with tab_chat:
         st.session_state.messages.append({"role": "assistant", "content": answer})
         st.rerun()
 
-# ================= TAB 2: COPILOTO REPOSITORIO =================
-with tab_repo:
-    st.title("📦 Copiloto de repositorios")
-    uploaded_zip = st.file_uploader("Sube un repositorio (.zip)", type=["zip"])
-    if uploaded_zip:
-        tmp = extract_zip(uploaded_zip)
-        st.session_state.repo_tmpdir = tmp
-        st.session_state.repo_tree = build_repo_tree(tmp.name)
-
-        if st.button("🔄 Analizar repositorio de nuevo"):
-            st.session_state.repo_messages = []
-            st.session_state.repo_memory_summary = ""
-            st.session_state.analysis_cache = {}
-            analizar_todo_repositorio(tmp.name)
-        else:
-            if not st.session_state.repo_memory_summary:
-                analizar_todo_repositorio(tmp.name)
-
-    col1, col2 = st.columns([1,2])
-
-    def render_tree(tree, base, rel=""):
-        for k,v in tree.items():
-            if v=="FILE":
-                st.text(f"📄 {rel}{k}")
-            else:
-                with st.expander(f"📁 {rel}{k}"):
-                    render_tree(v, base, rel+ k + "/")
-
-    with col1:
-        st.subheader("Repositorio")
-        if st.session_state.repo_tree:
-            render_tree(st.session_state.repo_tree, st.session_state.repo_tmpdir.name)
-        else:
-            st.info("Sube un ZIP para empezar")
-
-    with col2:
-        st.subheader("Chat técnico")
-        for m in st.session_state.repo_messages:
-            with st.chat_message(m["role"]):
-                st.markdown(m["content"])
-        if repo_prompt := st.chat_input("Pregunta sobre el repositorio...", key="repo_chat"):
-            payload = {"model": st.session_state.model,
-                       "messages": build_repo_context() + st.session_state.repo_messages + [{"role":"user","content":repo_prompt}]}
-            if st.session_state.include_temp:
-                payload["temperature"] = st.session_state.temperature
-            if st.session_state.include_tokens:
-                payload["max_tokens"] = st.session_state.max_tokens
-            with st.spinner("🤖 La IA está pensando..."):
-                answer = call_ia(payload)
-            st.session_state.repo_messages.append({"role":"user","content":repo_prompt})
-            st.session_state.repo_messages.append({"role":"assistant","content":answer})
-            st.rerun()
-
-# ================= TAB 3: CONSULTA TAREAS DEVOPS =================
+# ================= TAB 2: CONSULTA TAREAS DEVOPS =================
 with tab_devops:
-    st.title("🎯 Consulta de Tareas Azure DevOps")
-    st.markdown("Pregunta sobre work items anteriores y encuentra soluciones similares usando IA")
-    
-    # Configuración de Azure DevOps
-    with st.expander("⚙️ Configuración Azure DevOps", expanded=not st.session_state.devops_indexed):
+    st.title("🎯 Azure DevOps")
+    st.markdown("Consulta work items y documentación Wiki de Azure DevOps usando IA")
+
+    # Configuración de Azure DevOps (compartida entre subtabs)
+    with st.expander("⚙️ Configuración Azure DevOps", expanded=(not st.session_state.devops_indexed and not st.session_state.wiki_indexed)):
         col1, col2 = st.columns(2)
         
         with col1:
@@ -815,77 +892,84 @@ with tab_devops:
                 st.session_state.devops_messages = []
                 st.success("✅ Cache limpiado")
                 st.rerun()
-    
-    # Estado de indexación
-    if st.session_state.devops_indexed:
-        tipos_en_cache = {}
-        for inc in st.session_state.devops_incidencias:
-            tipo = inc['tipo']
-            tipos_en_cache[tipo] = tipos_en_cache.get(tipo, 0) + 1
-        
-        tipos_str = ", ".join([f"{t} ({c})" for t, c in tipos_en_cache.items()])
-        st.info(f"📊 **{len(st.session_state.devops_incidencias)} work items indexados**: {tipos_str}")
-        st.info(f"🎯 **Top-K configurado**: {st.session_state.get('devops_top_k', 5)} items similares por consulta")
-    
-    # Chat de consultas
+
     st.markdown("---")
-    
-    col_chat, col_stats = st.columns([2, 1])
-    
-    with col_stats:
-        st.subheader("📈 Estadísticas")
-        if st.session_state.devops_incidencias:
-            st.markdown("**Por tipo:**")
-            tipos = {}
+
+    # Crear subtabs
+    subtab_workitems, subtab_wiki = st.tabs(["📋 Consulta Work Items", "📚 Consulta Wiki"])
+
+    # ================= SUBTAB 1: CONSULTA WORK ITEMS =================
+    with subtab_workitems:
+        # Estado de indexación
+        if st.session_state.devops_indexed:
+            tipos_en_cache = {}
             for inc in st.session_state.devops_incidencias:
                 tipo = inc['tipo']
-                tipos[tipo] = tipos.get(tipo, 0) + 1
-            for tipo, count in sorted(tipos.items()):
-                st.metric(tipo, count)
-            
-            st.markdown("---")
-            
-            st.markdown("**Por estado:**")
-            estados = {}
-            for inc in st.session_state.devops_incidencias:
-                estado = inc['estado']
-                estados[estado] = estados.get(estado, 0) + 1
-            for estado, count in sorted(estados.items(), key=lambda x: x[1], reverse=True)[:5]:
-                st.text(f"{estado}: {count}")
-        else:
-            st.info("Sincroniza primero los work items")
-    
-    with col_chat:
-        st.subheader("💬 Chat de consultas")
-        
-        for m in st.session_state.devops_messages:
-            with st.chat_message(m["role"]):
-                st.markdown(m["content"])
-        
-        if devops_query := st.chat_input(
-            "Pregunta sobre work items... ej: '¿Cómo se implementó X?'", 
-            key="devops_chat",
-            disabled=not st.session_state.devops_indexed
-        ):
-            if not st.session_state.devops_indexed:
-                st.warning("⚠️ Primero debes sincronizar e indexar los work items")
+                tipos_en_cache[tipo] = tipos_en_cache.get(tipo, 0) + 1
+
+            tipos_str = ", ".join([f"{t} ({c})" for t, c in tipos_en_cache.items()])
+            st.info(f"📊 **{len(st.session_state.devops_incidencias)} work items indexados**: {tipos_str}")
+            st.info(f"🎯 **Top-K configurado**: {st.session_state.get('devops_top_k', 5)} items similares por consulta")
+
+        # Chat de consultas
+        st.markdown("---")
+
+        col_chat, col_stats = st.columns([2, 1])
+
+        with col_stats:
+            st.subheader("📈 Estadísticas")
+            if st.session_state.devops_incidencias:
+                st.markdown("**Por tipo:**")
+                tipos = {}
+                for inc in st.session_state.devops_incidencias:
+                    tipo = inc['tipo']
+                    tipos[tipo] = tipos.get(tipo, 0) + 1
+                for tipo, count in sorted(tipos.items()):
+                    st.metric(tipo, count)
+
+                st.markdown("---")
+
+                st.markdown("**Por estado:**")
+                estados = {}
+                for inc in st.session_state.devops_incidencias:
+                    estado = inc['estado']
+                    estados[estado] = estados.get(estado, 0) + 1
+                for estado, count in sorted(estados.items(), key=lambda x: x[1], reverse=True)[:5]:
+                    st.text(f"{estado}: {count}")
             else:
-                st.session_state.devops_messages.append({"role": "user", "content": devops_query})
-                
-                top_k = st.session_state.get('devops_top_k', 5)
-                
-                with st.spinner(f"🔍 Buscando los {top_k} work items más similares..."):
-                    resultados = buscar_incidencias_similares(
-                        devops_query,
-                        st.session_state.devops_incidencias,
-                        st.session_state.devops_embeddings,
-                        st.session_state.embedding_model,
-                        top_k=top_k
-                    )
-                
-                contexto = construir_contexto_devops(resultados)
-                
-                system_prompt = """Eres un asistente técnico experto en analizar work items de software. 
+                st.info("Sincroniza primero los work items")
+
+        with col_chat:
+            st.subheader("💬 Chat de consultas")
+
+            for m in st.session_state.devops_messages:
+                with st.chat_message(m["role"]):
+                    st.markdown(m["content"])
+
+            if devops_query := st.chat_input(
+                "Pregunta sobre work items... ej: '¿Cómo se implementó X?'",
+                key="devops_chat",
+                disabled=not st.session_state.devops_indexed
+            ):
+                if not st.session_state.devops_indexed:
+                    st.warning("⚠️ Primero debes sincronizar e indexar los work items")
+                else:
+                    st.session_state.devops_messages.append({"role": "user", "content": devops_query})
+
+                    top_k = st.session_state.get('devops_top_k', 5)
+
+                    with st.spinner(f"🔍 Buscando los {top_k} work items más similares..."):
+                        resultados = buscar_incidencias_similares(
+                            devops_query,
+                            st.session_state.devops_incidencias,
+                            st.session_state.devops_embeddings,
+                            st.session_state.embedding_model,
+                            top_k=top_k
+                        )
+
+                    contexto = construir_contexto_devops(resultados)
+
+                    system_prompt = """Eres un asistente técnico experto en analizar work items de software.
 
 Cuando respondas:
 1. Analiza los work items similares (pueden ser Bugs, User Stories, Tasks, etc.)
@@ -895,43 +979,325 @@ Cuando respondas:
 5. Menciona el ID y tipo de los work items relevantes
 6. Si encuentras patrones comunes, menciónalo"""
 
+                    payload = {
+                        "model": st.session_state.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": f"{contexto}\n\n**Consulta:** {devops_query}"}
+                        ]
+                    }
+
+                    if st.session_state.include_temp:
+                        payload["temperature"] = st.session_state.temperature
+                    if st.session_state.include_tokens:
+                        payload["max_tokens"] = st.session_state.max_tokens
+
+                    with st.spinner("🤖 Frida está analizando los work items..."):
+                        respuesta = call_ia(payload)
+
+                    st.session_state.devops_messages.append({"role": "assistant", "content": respuesta})
+
+                    with st.expander(f"📋 Ver los {top_k} work items más similares"):
+                        for i, resultado in enumerate(resultados, 1):
+                            inc = resultado["incidencia"]
+                            sim = resultado["similitud"]
+
+                            st.markdown(f"### Work Item {i} - [{inc['tipo']}] ID: {inc['id']} (Similitud: {sim:.1%})")
+                            st.markdown(f"**Título:** {inc['titulo']}")
+                            st.markdown(f"**Estado:** {inc['estado']}")
+                            st.markdown(f"**Área:** {inc['area']}")
+                            if inc['resolucion']:
+                                st.markdown(f"**Resolución:** {inc['resolucion']}")
+                            st.markdown(f"**Descripción:** {limpiar_html(inc['descripcion'])[:300]}...")
+                            if inc['tags']:
+                                st.markdown(f"**Tags:** {inc['tags']}")
+                            st.markdown("---")
+
+                    st.rerun()
+
+    # ================= SUBTAB 2: CONSULTA WIKI =================
+    with subtab_wiki:
+        st.subheader("📚 Consulta Wiki de Azure DevOps")
+        st.markdown("Indexa páginas de la Wiki y haz consultas sobre su contenido")
+
+        # Verificar configuración de Azure DevOps
+        if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
+            st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
+            st.stop()
+
+        # Sección de carga de Wiki
+        with st.expander("📥 Seleccionar Páginas de Wiki", expanded=not st.session_state.wiki_indexed):
+            col1, col2 = st.columns([2, 1])
+
+            with col1:
+                # Listar wikis disponibles
+                if st.button("🔍 Listar Wikis del Proyecto"):
+                    with st.spinner("Obteniendo wikis..."):
+                        wikis = obtener_wikis_proyecto(
+                            st.session_state.devops_org,
+                            st.session_state.devops_project,
+                            st.session_state.devops_pat
+                        )
+
+                    if wikis:
+                        st.session_state.available_wikis = wikis
+                        st.success(f"✅ {len(wikis)} wiki(s) encontrada(s)")
+                    else:
+                        st.error("❌ No se encontraron wikis o hubo un error")
+
+                # Selector de wiki
+                if 'available_wikis' in st.session_state and st.session_state.available_wikis:
+                    selected_wiki_idx = st.selectbox(
+                        "Selecciona una Wiki",
+                        options=range(len(st.session_state.available_wikis)),
+                        format_func=lambda i: f"{st.session_state.available_wikis[i]['name']} ({st.session_state.available_wikis[i]['type']})",
+                        key="wiki_selector"
+                    )
+
+                    selected_wiki = st.session_state.available_wikis[selected_wiki_idx]
+                    st.session_state.selected_wiki_id = selected_wiki['id']
+                    st.session_state.selected_wiki_name = selected_wiki['name']
+
+                    st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
+
+                    # Botón para listar páginas
+                    if st.button("📄 Listar Páginas de esta Wiki"):
+                        with st.spinner("Obteniendo páginas..."):
+                            paginas = obtener_paginas_wiki(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat,
+                                st.session_state.selected_wiki_id
+                            )
+
+                        if paginas:
+                            st.session_state.available_wiki_pages = paginas
+                            st.success(f"✅ {len(paginas)} página(s) encontrada(s)")
+                        else:
+                            st.warning("⚠️ No se encontraron páginas en esta wiki")
+
+                    # Selector de páginas (individual + batch)
+                    if 'available_wiki_pages' in st.session_state and st.session_state.available_wiki_pages:
+                        st.markdown("#### Seleccionar páginas para indexar:")
+
+                        # Opción: Seleccionar todas
+                        select_all = st.checkbox("Seleccionar todas las páginas", value=False)
+
+                        # Lista de checkboxes para páginas
+                        selected_pages = []
+
+                        if select_all:
+                            selected_pages = st.session_state.available_wiki_pages.copy()
+                            st.info(f"📑 Todas las páginas seleccionadas ({len(selected_pages)})")
+                        else:
+                            st.markdown("**Selecciona páginas individualmente:**")
+                            for idx, page in enumerate(st.session_state.available_wiki_pages):
+                                if st.checkbox(
+                                    f"{page['path']}",
+                                    value=False,
+                                    key=f"wiki_page_{idx}"
+                                ):
+                                    selected_pages.append(page)
+
+                        st.session_state.selected_wiki_pages = selected_pages
+
+                        if selected_pages:
+                            st.success(f"✅ {len(selected_pages)} página(s) seleccionada(s)")
+
+            with col2:
+                st.markdown("#### ⚙️ Configuración")
+                wiki_chunk_size = st.slider(
+                    "Tamaño de fragmentos",
+                    min_value=500,
+                    max_value=4000,
+                    value=1000,
+                    step=100,
+                    help="Tamaño de cada fragmento de las páginas Wiki"
+                )
+
+                wiki_top_k = st.slider(
+                    "Fragmentos relevantes",
+                    min_value=3,
+                    max_value=10,
+                    value=5,
+                    step=1,
+                    help="Número de fragmentos a usar como contexto"
+                )
+
+            st.markdown("---")
+
+            # Botones de acción
+            col_btn1, col_btn2 = st.columns([3, 1])
+
+            with col_btn1:
+                if st.button("🔄 Procesar e Indexar Páginas", use_container_width=True, key="procesar_wiki_btn"):
+                    if not hasattr(st.session_state, 'selected_wiki_pages') or len(st.session_state.selected_wiki_pages) == 0:
+                        st.error("❌ Debes seleccionar al menos una página de la wiki")
+                    else:
+                        # Procesar cada página seleccionada
+                        paginas_contenido = []
+                        progress_bar = st.progress(0)
+                        total_pages = len(st.session_state.selected_wiki_pages)
+
+                        for idx, page in enumerate(st.session_state.selected_wiki_pages):
+                            progress_bar.progress((idx + 1) / total_pages)
+
+                            with st.spinner(f"Descargando {page['path']}..."):
+                                contenido_page = obtener_contenido_pagina_wiki(
+                                    st.session_state.devops_org,
+                                    st.session_state.devops_project,
+                                    st.session_state.devops_pat,
+                                    st.session_state.selected_wiki_id,
+                                    page['id']
+                                )
+
+                            if contenido_page and contenido_page['content']:
+                                # Limpiar markdown
+                                texto_limpio = limpiar_markdown(contenido_page['content'])
+
+                                # Dividir en chunks
+                                chunks = dividir_en_chunks(texto_limpio, chunk_size=wiki_chunk_size)
+
+                                paginas_contenido.append({
+                                    'id': page['id'],
+                                    'path': page['path'],
+                                    'chunks': chunks
+                                })
+
+                        if paginas_contenido:
+                            st.success(f"✅ {len(paginas_contenido)} página(s) procesada(s)")
+
+                            # Cargar modelo si no está cargado
+                            if st.session_state.embedding_model is None:
+                                st.session_state.embedding_model = cargar_modelo_embeddings()
+
+                            # Generar embeddings
+                            embeddings, referencias = generar_embeddings_wiki(
+                                paginas_contenido,
+                                st.session_state.embedding_model
+                            )
+
+                            # Extraer lista plana de chunks para búsqueda
+                            todos_chunks = []
+                            for pagina in paginas_contenido:
+                                todos_chunks.extend(pagina['chunks'])
+
+                            # Guardar en session_state
+                            st.session_state.wiki_paginas_contenido = paginas_contenido
+                            st.session_state.wiki_embeddings = embeddings
+                            st.session_state.wiki_referencias = referencias
+                            st.session_state.wiki_chunks = todos_chunks
+                            st.session_state.wiki_indexed = True
+                            st.session_state.wiki_top_k = wiki_top_k
+
+                            total_chunks = sum(len(p['chunks']) for p in paginas_contenido)
+                            st.success(f"✅ Wiki indexada: {len(paginas_contenido)} páginas, {total_chunks} fragmentos")
+                            st.rerun()
+                        else:
+                            st.error("❌ No se pudo procesar ninguna página")
+
+            with col_btn2:
+                if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_wiki"):
+                    st.session_state.wiki_paginas_contenido = []
+                    st.session_state.wiki_embeddings = None
+                    st.session_state.wiki_referencias = []
+                    st.session_state.wiki_chunks = []
+                    st.session_state.wiki_indexed = False
+                    st.session_state.wiki_messages = []
+                    if 'available_wikis' in st.session_state:
+                        del st.session_state.available_wikis
+                    if 'available_wiki_pages' in st.session_state:
+                        del st.session_state.available_wiki_pages
+                    if 'selected_wiki_pages' in st.session_state:
+                        del st.session_state.selected_wiki_pages
+                    st.success("✅ Wiki limpiada")
+                    st.rerun()
+
+        # Estado de indexación
+        if st.session_state.wiki_indexed:
+            total_chunks = len(st.session_state.wiki_chunks)
+            total_pages = len(st.session_state.wiki_paginas_contenido)
+            st.info(f"📚 **Wiki indexada**: {st.session_state.selected_wiki_name} - {total_pages} páginas, {total_chunks} fragmentos")
+            st.info(f"🎯 **Top-K configurado**: {st.session_state.get('wiki_top_k', 5)} fragmentos por consulta")
+
+        st.markdown("---")
+
+        # Chat de consultas Wiki
+        st.subheader("💬 Consultas sobre la Wiki")
+
+        for m in st.session_state.wiki_messages:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+
+        if wiki_query := st.chat_input(
+            "Pregunta sobre la Wiki... ej: '¿Cómo configurar X?'",
+            key="wiki_chat",
+            disabled=not st.session_state.wiki_indexed
+        ):
+            if not st.session_state.wiki_indexed:
+                st.warning("⚠️ Primero debes seleccionar e indexar páginas de la Wiki")
+            else:
+                st.session_state.wiki_messages.append({"role": "user", "content": wiki_query})
+
+                top_k = st.session_state.get('wiki_top_k', 5)
+
+                # Buscar chunks relevantes
+                with st.spinner(f"🔍 Buscando fragmentos relevantes en la Wiki..."):
+                    resultados = buscar_chunks_wiki_similares(
+                        wiki_query,
+                        st.session_state.wiki_chunks,
+                        st.session_state.wiki_embeddings,
+                        st.session_state.wiki_referencias,
+                        st.session_state.embedding_model,
+                        top_k=top_k
+                    )
+
+                # Construir contexto
+                contexto = construir_contexto_wiki(resultados)
+
+                # Llamar a Frida
+                system_prompt = """Eres un asistente experto en analizar documentación técnica de wikis.
+
+Cuando respondas:
+1. Basa tu respuesta en la información de los fragmentos de la Wiki proporcionados
+2. Si la información no está en los fragmentos, indícalo claramente
+3. Menciona las páginas específicas de la Wiki cuando sea relevante
+4. Proporciona respuestas claras y estructuradas
+5. Si encuentras procedimientos o pasos, enuméralos claramente"""
+
                 payload = {
                     "model": st.session_state.model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"{contexto}\n\n**Consulta:** {devops_query}"}
+                        {"role": "user", "content": f"{contexto}\n\n**Consulta:** {wiki_query}"}
                     ]
                 }
-                
+
                 if st.session_state.include_temp:
                     payload["temperature"] = st.session_state.temperature
                 if st.session_state.include_tokens:
                     payload["max_tokens"] = st.session_state.max_tokens
-                
-                with st.spinner("🤖 Frida está analizando los work items..."):
+
+                with st.spinner("🤖 Frida está analizando la Wiki..."):
                     respuesta = call_ia(payload)
-                
-                st.session_state.devops_messages.append({"role": "assistant", "content": respuesta})
-                
-                with st.expander(f"📋 Ver los {top_k} work items más similares"):
+
+                st.session_state.wiki_messages.append({"role": "assistant", "content": respuesta})
+
+                # Mostrar fragmentos usados
+                with st.expander(f"📋 Ver fragmentos de Wiki utilizados"):
                     for i, resultado in enumerate(resultados, 1):
-                        inc = resultado["incidencia"]
                         sim = resultado["similitud"]
-                        
-                        st.markdown(f"### Work Item {i} - [{inc['tipo']}] ID: {inc['id']} (Similitud: {sim:.1%})")
-                        st.markdown(f"**Título:** {inc['titulo']}")
-                        st.markdown(f"**Estado:** {inc['estado']}")
-                        st.markdown(f"**Área:** {inc['area']}")
-                        if inc['resolucion']:
-                            st.markdown(f"**Resolución:** {inc['resolucion']}")
-                        st.markdown(f"**Descripción:** {limpiar_html(inc['descripcion'])[:300]}...")
-                        if inc['tags']:
-                            st.markdown(f"**Tags:** {inc['tags']}")
+                        chunk = resultado["chunk"]
+                        path = resultado["path"]
+
+                        st.markdown(f"### Fragmento {i} - Página: {path}")
+                        st.markdown(f"**Relevancia:** {sim:.1%}")
+                        st.text(chunk[:500] + ("..." if len(chunk) > 500 else ""))
                         st.markdown("---")
-                
+
                 st.rerun()
 
-# ================= TAB 4: ANÁLISIS DOCUMENTOS =================
+# ================= TAB 3: ANÁLISIS DOCUMENTOS =================
 with tab_doc:
     st.title("📄 Análisis de Documentos")
     st.markdown("Carga un documento Word y haz preguntas sobre su contenido o genera work items automáticamente")
@@ -1005,7 +1371,7 @@ with tab_doc:
             chunk_size = st.slider(
                 "Tamaño de fragmentos",
                 min_value=500,
-                max_value=2000,
+                max_value=4000,
                 value=1000,
                 step=100,
                 help="Tamaño de cada fragmento del documento"
