@@ -11,6 +11,8 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import docx
 from io import BytesIO
+import PyPDF2
+import re
 
 # ==================================================
 # USUARIOS FIJOS
@@ -100,7 +102,15 @@ defaults = {
     "wiki_indexed": False,
     "wiki_top_k": 5,
     "selected_wiki_id": "",
-    "selected_wiki_name": ""
+    "selected_wiki_name": "",
+    # Estado para Crear Wiki desde Documento
+    "wiki_create_doc_content": "",
+    "wiki_create_doc_filename": "",
+    "wiki_create_estructura_propuesta": None,
+    "wiki_create_estructura_editada": None,
+    "wiki_create_modo": "nueva",  # "nueva" o "extender"
+    "wiki_create_pagina_padre": "",
+    "wiki_create_ready_to_create": False
 }
 
 for k, v in defaults.items():
@@ -603,7 +613,8 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
             return paginas
 
         # Si hay páginas, aplanarlas
-        if "id" in data:
+        # La respuesta puede tener 'id' o directamente 'subPages' en la raíz
+        if "id" in data or "subPages" in data:
             return aplanar_paginas(data)
 
         return []
@@ -747,6 +758,282 @@ def construir_contexto_wiki(chunks_similares):
         contexto += "---\n\n"
 
     return contexto
+
+# ==================================================
+# HELPERS PARA CREACIÓN DE WIKI DESDE DOCUMENTOS
+# ==================================================
+
+def leer_pdf_desde_bytes(file_bytes):
+    """Lee un documento PDF desde bytes"""
+    try:
+        pdf_reader = PyPDF2.PdfReader(BytesIO(file_bytes))
+        texto_completo = []
+
+        for page in pdf_reader.pages:
+            texto = page.extract_text()
+            if texto.strip():
+                texto_completo.append(texto.strip())
+
+        return "\n\n".join(texto_completo)
+    except Exception as e:
+        st.error(f"Error al leer PDF: {str(e)}")
+        return ""
+
+def analizar_documento_con_frida(contenido_documento, filename):
+    """
+    Usa Frida para analizar el documento y proponer una estructura de wiki
+    Retorna una estructura jerárquica de páginas sugeridas
+    """
+    prompt_analisis = f"""Analiza el siguiente documento funcional y propón una estructura jerárquica de páginas Wiki para Azure DevOps.
+
+**Documento:** {filename}
+
+**Contenido del documento:**
+{contenido_documento[:15000]}
+{"[Documento truncado por longitud...]" if len(contenido_documento) > 15000 else ""}
+
+**Tu tarea:**
+1. Identifica las secciones principales del documento
+2. Propón una estructura jerárquica de páginas Wiki organizada y clara
+3. Para cada página, propón:
+   - Título de la página
+   - Resumen/contenido mejorado (en markdown)
+   - Si es página raíz o subpágina (indicar padre)
+
+**Estructura esperada:**
+- Una página principal/índice que sirva de resumen general
+- Páginas de secciones principales (máximo 5-7 páginas principales)
+- Subpáginas para detalles específicos (cuando sea necesario)
+- Páginas auxiliares (glosario, FAQs, referencias) si aplica
+
+**Formato de respuesta (JSON):**
+```json
+{{
+  "paginas": [
+    {{
+      "titulo": "Índice y Resumen General",
+      "es_raiz": true,
+      "padre": null,
+      "contenido_markdown": "# Resumen del Proyecto\\n\\nEste documento describe...",
+      "orden": 0
+    }},
+    {{
+      "titulo": "Introducción",
+      "es_raiz": false,
+      "padre": "Índice y Resumen General",
+      "contenido_markdown": "## Introducción\\n\\nObjetivos del proyecto...",
+      "orden": 1
+    }}
+  ]
+}}
+```
+
+**Importante:**
+- Usa markdown para el contenido
+- Mejora la redacción y claridad del contenido original
+- Organiza la información de forma lógica
+- No crees demasiadas páginas (máximo 15)
+- Cada página debe tener contenido sustancial"""
+
+    payload = {
+        "model": st.session_state.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Eres un experto en documentación técnica y estructuración de contenido. Especializas en crear wikis bien organizadas y fáciles de navegar."
+            },
+            {
+                "role": "user",
+                "content": prompt_analisis
+            }
+        ],
+        "temperature": 0.3
+    }
+
+    try:
+        with st.spinner("🧠 Frida está analizando el documento y proponiendo estructura..."):
+            respuesta = call_ia(payload)
+
+        # Extraer JSON de la respuesta
+        json_match = re.search(r'```json\s*(.*?)\s*```', respuesta, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+            estructura = json.loads(json_str)
+            return estructura
+        else:
+            # Intentar parsear directamente
+            estructura = json.loads(respuesta)
+            return estructura
+
+    except json.JSONDecodeError as e:
+        st.error(f"Error al parsear respuesta de Frida: {str(e)}")
+        st.code(respuesta[:500])
+        return None
+    except Exception as e:
+        st.error(f"Error al analizar documento: {str(e)}")
+        return None
+
+def mejorar_contenido_pagina_con_frida(titulo_pagina, contenido_original, contexto_documento=""):
+    """
+    Usa Frida para mejorar el contenido de una página específica
+    """
+    prompt_mejora = f"""Mejora el siguiente contenido para una página de Wiki en Azure DevOps.
+
+**Título de la página:** {titulo_pagina}
+
+**Contenido original:**
+{contenido_original}
+
+**Contexto del documento completo (si aplica):**
+{contexto_documento[:3000] if contexto_documento else "No disponible"}
+
+**Tu tarea:**
+1. Reformula el contenido para mayor claridad
+2. Estructura la información de forma lógica usando markdown
+3. Añade ejemplos o aclaraciones donde sea útil
+4. Mantén un tono profesional pero accesible
+5. Usa listas, tablas, y formato markdown adecuadamente
+
+**Devuelve solo el contenido markdown mejorado, sin explicaciones adicionales.**"""
+
+    payload = {
+        "model": st.session_state.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Eres un experto en redacción técnica y documentación clara."
+            },
+            {
+                "role": "user",
+                "content": prompt_mejora
+            }
+        ],
+        "temperature": 0.5
+    }
+
+    try:
+        respuesta = call_ia(payload)
+        return respuesta.strip()
+    except Exception as e:
+        st.error(f"Error al mejorar contenido: {str(e)}")
+        return contenido_original
+
+def crear_pagina_wiki_azure(organization, project, pat, wiki_id, path, contenido_markdown):
+    """
+    Crea o actualiza una página en Azure DevOps Wiki
+
+    Parameters:
+    - path: Ruta de la página (ej: "/Introduccion" o "/Introduccion/Objetivos")
+    - contenido_markdown: Contenido en formato markdown
+
+    Returns:
+    - True si se creó exitosamente, False si hubo error
+    """
+    # Limpiar y formatear el path
+    path = path.strip()
+    if not path.startswith('/'):
+        path = '/' + path
+
+    # URL de la API
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?path={path}&api-version=7.1"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    payload = {
+        "content": contenido_markdown
+    }
+
+    try:
+        response = requests.put(url, json=payload, headers=headers, timeout=30)
+
+        if response.status_code in [200, 201]:
+            return True, response.json()
+        elif response.status_code == 409:
+            # La página ya existe, intentar actualizar
+            return actualizar_pagina_wiki_azure(organization, project, pat, wiki_id, path, contenido_markdown)
+        else:
+            st.error(f"❌ Error {response.status_code} al crear página: {path}")
+            st.code(response.text[:300])
+            return False, None
+
+    except Exception as e:
+        st.error(f"❌ Error al crear página {path}: {str(e)}")
+        return False, None
+
+def actualizar_pagina_wiki_azure(organization, project, pat, wiki_id, path, contenido_markdown):
+    """
+    Actualiza una página existente en Azure DevOps Wiki
+    """
+    # Primero obtener la versión actual de la página
+    url_get = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?path={path}&api-version=7.1"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    try:
+        # Obtener ETag para actualización
+        response_get = requests.get(url_get, headers=headers, timeout=30)
+
+        if response_get.status_code != 200:
+            st.error(f"No se pudo obtener información de la página: {path}")
+            return False, None
+
+        page_data = response_get.json()
+        etag = response_get.headers.get('ETag')
+
+        # Actualizar con el ETag
+        headers['If-Match'] = etag
+
+        payload = {
+            "content": contenido_markdown
+        }
+
+        response_put = requests.put(url_get, json=payload, headers=headers, timeout=30)
+
+        if response_put.status_code in [200, 201]:
+            return True, response_put.json()
+        else:
+            st.error(f"❌ Error {response_put.status_code} al actualizar página: {path}")
+            st.code(response_put.text[:300])
+            return False, None
+
+    except Exception as e:
+        st.error(f"❌ Error al actualizar página {path}: {str(e)}")
+        return False, None
+
+def obtener_estructura_paginas_wiki_existente(organization, project, pat, wiki_id):
+    """
+    Obtiene la estructura de páginas existentes en la wiki para mostrar al usuario
+    """
+    paginas = obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
+
+    if not paginas:
+        return []
+
+    # Crear estructura jerárquica para visualización
+    estructura = []
+    for pagina in paginas:
+        path_parts = pagina['path'].strip('/').split('/')
+        nivel = len(path_parts) - 1
+        estructura.append({
+            'path': pagina['path'],
+            'id': pagina['id'],
+            'nivel': nivel,
+            'nombre': path_parts[-1] if path_parts else pagina['path']
+        })
+
+    return estructura
 
 # ==================================================
 # SIDEBAR
@@ -959,7 +1246,11 @@ with tab_devops:
     st.markdown("---")
 
     # Crear subtabs
-    subtab_workitems, subtab_wiki = st.tabs(["📋 Consulta Work Items", "📚 Consulta Wiki"])
+    subtab_workitems, subtab_wiki, subtab_crear_wiki = st.tabs([
+        "📋 Consulta Work Items",
+        "📚 Consulta Wiki",
+        "🔨 Crear Wiki desde Documento"
+    ])
 
     # ================= SUBTAB 1: CONSULTA WORK ITEMS =================
     with subtab_workitems:
@@ -1359,6 +1650,386 @@ Cuando respondas:
                         st.markdown("---")
 
                 st.rerun()
+
+    # ================= SUBTAB 3: CREAR WIKI DESDE DOCUMENTO =================
+    with subtab_crear_wiki:
+        st.subheader("🔨 Crear Estructura Wiki desde Documento Funcional")
+        st.markdown("Carga un documento funcional (.docx o .pdf), analízalo con Frida, y crea páginas Wiki en Azure DevOps")
+
+        # Verificar configuración de Azure DevOps
+        if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
+            st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
+            st.stop()
+
+        # === PASO 1: CARGA DEL DOCUMENTO ===
+        with st.expander("📥 Paso 1: Cargar Documento Funcional", expanded=(not st.session_state.wiki_create_doc_content)):
+            st.markdown("**Sube un documento funcional (.docx o .pdf)**")
+
+            col_upload, col_info = st.columns([2, 1])
+
+            with col_upload:
+                uploaded_file = st.file_uploader(
+                    "Selecciona documento",
+                    type=["docx", "pdf"],
+                    key="wiki_create_upload",
+                    help="Documento Word o PDF con especificaciones funcionales"
+                )
+
+                if uploaded_file:
+                    file_ext = uploaded_file.name.split('.')[-1].lower()
+
+                    if st.button("📖 Procesar Documento", key="procesar_doc_wiki"):
+                        file_bytes = uploaded_file.read()
+
+                        with st.spinner(f"📖 Leyendo {file_ext.upper()}..."):
+                            if file_ext == "docx":
+                                contenido = leer_docx_desde_bytes(file_bytes)
+                            elif file_ext == "pdf":
+                                contenido = leer_pdf_desde_bytes(file_bytes)
+                            else:
+                                st.error("Formato no soportado")
+                                contenido = ""
+
+                        if contenido:
+                            st.session_state.wiki_create_doc_content = contenido
+                            st.session_state.wiki_create_doc_filename = uploaded_file.name
+                            st.success(f"✅ Documento procesado: {len(contenido)} caracteres")
+                            st.rerun()
+                        else:
+                            st.error("❌ No se pudo leer el documento")
+
+            with col_info:
+                if st.session_state.wiki_create_doc_content:
+                    st.metric("📄 Documento cargado", st.session_state.wiki_create_doc_filename)
+                    st.metric("📝 Tamaño", f"{len(st.session_state.wiki_create_doc_content)} caracteres")
+
+                    if st.button("🗑️ Limpiar documento", key="limpiar_doc_wiki_create"):
+                        st.session_state.wiki_create_doc_content = ""
+                        st.session_state.wiki_create_doc_filename = ""
+                        st.session_state.wiki_create_estructura_propuesta = None
+                        st.session_state.wiki_create_estructura_editada = None
+                        st.session_state.wiki_create_ready_to_create = False
+                        st.rerun()
+
+        # === PASO 2: ANÁLISIS CON FRIDA ===
+        if st.session_state.wiki_create_doc_content:
+            with st.expander("🧠 Paso 2: Analizar con Frida y Proponer Estructura", expanded=(not st.session_state.wiki_create_estructura_propuesta)):
+                st.markdown("""
+                **Frida analizará el documento y propondrá:**
+                - Una página principal de índice/resumen
+                - Páginas para secciones principales
+                - Subpáginas para detalles específicos
+                - Contenido mejorado en formato markdown
+                """)
+
+                col_analizar, col_reset = st.columns([3, 1])
+
+                with col_analizar:
+                    if st.button("✨ Analizar con Frida y Proponer Estructura", use_container_width=True, key="analizar_frida"):
+                        estructura = analizar_documento_con_frida(
+                            st.session_state.wiki_create_doc_content,
+                            st.session_state.wiki_create_doc_filename
+                        )
+
+                        if estructura and "paginas" in estructura:
+                            st.session_state.wiki_create_estructura_propuesta = estructura
+                            st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))  # Deep copy
+                            st.success(f"✅ Estructura propuesta: {len(estructura['paginas'])} páginas")
+                            st.rerun()
+                        else:
+                            st.error("❌ No se pudo generar estructura. Intenta de nuevo.")
+
+                with col_reset:
+                    if st.session_state.wiki_create_estructura_propuesta:
+                        if st.button("🔄 Re-analizar", use_container_width=True, key="reanalizar_frida"):
+                            st.session_state.wiki_create_estructura_propuesta = None
+                            st.session_state.wiki_create_estructura_editada = None
+                            st.rerun()
+
+        # === PASO 3: REVISAR Y EDITAR ESTRUCTURA ===
+        if st.session_state.wiki_create_estructura_propuesta:
+            with st.expander("📝 Paso 3: Revisar y Editar Estructura Propuesta", expanded=True):
+                st.markdown("**Revisa la estructura propuesta por Frida. Puedes editar el contenido de cada página.**")
+
+                estructura = st.session_state.wiki_create_estructura_editada
+
+                # Mostrar árbol de páginas
+                st.markdown("#### 🌳 Estructura de Páginas:")
+
+                for idx, pagina in enumerate(estructura['paginas']):
+                    nivel = 0 if pagina.get('es_raiz', False) else 1
+                    if pagina.get('padre') and not pagina.get('es_raiz', False):
+                        # Contar niveles basándose en la jerarquía
+                        padre = pagina.get('padre', '')
+                        for p in estructura['paginas']:
+                            if p['titulo'] == padre and not p.get('es_raiz', False):
+                                nivel = 2
+                                break
+
+                    indent = "　　" * nivel
+                    icon = "📄" if pagina.get('es_raiz', False) else ("📁" if nivel == 1 else "📃")
+
+                    with st.container():
+                        col_titulo, col_acciones = st.columns([4, 1])
+
+                        with col_titulo:
+                            st.markdown(f"{indent}{icon} **{pagina['titulo']}**")
+
+                        with col_acciones:
+                            if st.button("✏️ Editar", key=f"edit_page_{idx}"):
+                                st.session_state[f"editing_page_{idx}"] = True
+                                st.rerun()
+
+                        # Mostrar editor si está en modo edición
+                        if st.session_state.get(f"editing_page_{idx}", False):
+                            st.markdown(f"**Editando:** {pagina['titulo']}")
+
+                            nuevo_titulo = st.text_input(
+                                "Título",
+                                value=pagina['titulo'],
+                                key=f"titulo_{idx}"
+                            )
+
+                            nuevo_contenido = st.text_area(
+                                "Contenido (Markdown)",
+                                value=pagina['contenido_markdown'],
+                                height=200,
+                                key=f"contenido_{idx}"
+                            )
+
+                            col_save, col_improve, col_cancel = st.columns([1, 1, 1])
+
+                            with col_save:
+                                if st.button("💾 Guardar", key=f"save_{idx}", use_container_width=True):
+                                    estructura['paginas'][idx]['titulo'] = nuevo_titulo
+                                    estructura['paginas'][idx]['contenido_markdown'] = nuevo_contenido
+                                    st.session_state.wiki_create_estructura_editada = estructura
+                                    st.session_state[f"editing_page_{idx}"] = False
+                                    st.success("✅ Guardado")
+                                    st.rerun()
+
+                            with col_improve:
+                                if st.button("✨ Mejorar con Frida", key=f"improve_{idx}", use_container_width=True):
+                                    contenido_mejorado = mejorar_contenido_pagina_con_frida(
+                                        nuevo_titulo,
+                                        nuevo_contenido,
+                                        st.session_state.wiki_create_doc_content[:3000]
+                                    )
+                                    estructura['paginas'][idx]['contenido_markdown'] = contenido_mejorado
+                                    st.session_state.wiki_create_estructura_editada = estructura
+                                    st.success("✅ Mejorado")
+                                    st.rerun()
+
+                            with col_cancel:
+                                if st.button("❌ Cancelar", key=f"cancel_{idx}", use_container_width=True):
+                                    st.session_state[f"editing_page_{idx}"] = False
+                                    st.rerun()
+
+                        st.markdown("---")
+
+                st.markdown("---")
+
+                col_confirm, col_preview = st.columns([1, 1])
+
+                with col_confirm:
+                    if st.button("✅ Confirmar Estructura", use_container_width=True, key="confirmar_estructura"):
+                        st.session_state.wiki_create_ready_to_create = True
+                        st.success("✅ Estructura confirmada. Pasa al siguiente paso.")
+                        st.rerun()
+
+                with col_preview:
+                    st.info(f"📊 Total: {len(estructura['paginas'])} páginas a crear")
+
+        # === PASO 4: SELECCIONAR WIKI Y MODO DE CREACIÓN ===
+        if st.session_state.wiki_create_ready_to_create:
+            with st.expander("🎯 Paso 4: Configurar Creación en Azure DevOps", expanded=True):
+                st.markdown("**Selecciona la Wiki de destino y el modo de creación**")
+
+                # Listar wikis
+                col_wiki1, col_wiki2 = st.columns([2, 1])
+
+                with col_wiki1:
+                    if st.button("🔍 Listar Wikis del Proyecto", key="listar_wikis_crear"):
+                        with st.spinner("Obteniendo wikis..."):
+                            wikis = obtener_wikis_proyecto(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat
+                            )
+
+                        if wikis:
+                            st.session_state.available_wikis_crear = wikis
+                            st.success(f"✅ {len(wikis)} wiki(s) encontrada(s)")
+                        else:
+                            st.error("❌ No se encontraron wikis")
+
+                    # Selector de wiki
+                    if 'available_wikis_crear' in st.session_state and st.session_state.available_wikis_crear:
+                        selected_wiki_idx = st.selectbox(
+                            "Selecciona Wiki de destino",
+                            options=range(len(st.session_state.available_wikis_crear)),
+                            format_func=lambda i: f"{st.session_state.available_wikis_crear[i]['name']} ({st.session_state.available_wikis_crear[i]['type']})",
+                            key="wiki_destino_selector"
+                        )
+
+                        selected_wiki = st.session_state.available_wikis_crear[selected_wiki_idx]
+                        st.session_state.selected_wiki_id_crear = selected_wiki['id']
+                        st.session_state.selected_wiki_name_crear = selected_wiki['name']
+
+                        st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
+
+                with col_wiki2:
+                    # Modo de creación
+                    modo_creacion = st.radio(
+                        "Modo de creación",
+                        options=["nueva", "extender"],
+                        format_func=lambda x: "📄 Nueva página raíz" if x == "nueva" else "📁 Extender página existente",
+                        key="modo_creacion_radio"
+                    )
+
+                    st.session_state.wiki_create_modo = modo_creacion
+
+                # Si modo extender, mostrar páginas existentes
+                if modo_creacion == "extender" and 'selected_wiki_id_crear' in st.session_state:
+                    st.markdown("#### Selecciona página padre:")
+
+                    if st.button("📋 Listar Páginas Existentes", key="listar_paginas_existentes_crear"):
+                        with st.spinner("Obteniendo páginas..."):
+                            estructura_existente = obtener_estructura_paginas_wiki_existente(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat,
+                                st.session_state.selected_wiki_id_crear
+                            )
+
+                        if estructura_existente:
+                            st.session_state.wiki_estructura_existente = estructura_existente
+                            st.success(f"✅ {len(estructura_existente)} páginas encontradas")
+
+                    if 'wiki_estructura_existente' in st.session_state and st.session_state.wiki_estructura_existente:
+                        opciones_padre = ["/ (Raíz)"] + [f"{'　' * p['nivel']}{p['nombre']}" for p in st.session_state.wiki_estructura_existente]
+                        paths_padre = ["/"] + [p['path'] for p in st.session_state.wiki_estructura_existente]
+
+                        idx_padre = st.selectbox(
+                            "Página padre",
+                            options=range(len(opciones_padre)),
+                            format_func=lambda i: opciones_padre[i],
+                            key="padre_selector"
+                        )
+
+                        st.session_state.wiki_create_pagina_padre = paths_padre[idx_padre]
+                        st.info(f"📌 Las páginas se crearán bajo: **{paths_padre[idx_padre]}**")
+
+        # === PASO 5: CREAR PÁGINAS ===
+        if st.session_state.wiki_create_ready_to_create and 'selected_wiki_id_crear' in st.session_state:
+            st.markdown("---")
+            st.markdown("### 🚀 Crear Páginas en Azure DevOps")
+
+            col_warning, col_create = st.columns([2, 1])
+
+            with col_warning:
+                st.warning("""
+                **⚠️ Atención:**
+                - Se crearán páginas reales en Azure DevOps
+                - Si ya existen páginas con el mismo nombre, se intentarán actualizar
+                - Revisa bien la estructura antes de continuar
+                """)
+
+                st.info(f"""
+                **Resumen de creación:**
+                - Wiki destino: {st.session_state.get('selected_wiki_name_crear', 'No seleccionada')}
+                - Modo: {"Nueva página raíz" if st.session_state.wiki_create_modo == "nueva" else f"Extender bajo {st.session_state.get('wiki_create_pagina_padre', '/')}"}
+                - Total de páginas: {len(st.session_state.wiki_create_estructura_editada['paginas'])}
+                """)
+
+            with col_create:
+                if st.button("🚀 Crear Páginas en Wiki", use_container_width=True, type="primary", key="crear_paginas_finales"):
+                    estructura = st.session_state.wiki_create_estructura_editada
+                    paginas = estructura['paginas']
+
+                    # Ordenar páginas por orden y jerarquía
+                    paginas_ordenadas = sorted(paginas, key=lambda x: x.get('orden', 0))
+
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+
+                    exitos = 0
+                    errores = 0
+
+                    for idx, pagina in enumerate(paginas_ordenadas):
+                        progress_bar.progress((idx + 1) / len(paginas_ordenadas))
+                        status_text.text(f"Creando: {pagina['titulo']} ({idx + 1}/{len(paginas_ordenadas)})")
+
+                        # Construir path
+                        if st.session_state.wiki_create_modo == "nueva":
+                            # Modo nueva: crear desde raíz
+                            if pagina.get('es_raiz', False):
+                                path = f"/{pagina['titulo'].replace(' ', '-')}"
+                            else:
+                                padre = pagina.get('padre', '')
+                                if padre:
+                                    padre_clean = padre.replace(' ', '-')
+                                    titulo_clean = pagina['titulo'].replace(' ', '-')
+                                    path = f"/{padre_clean}/{titulo_clean}"
+                                else:
+                                    path = f"/{pagina['titulo'].replace(' ', '-')}"
+                        else:
+                            # Modo extender: añadir bajo página padre
+                            base_path = st.session_state.wiki_create_pagina_padre
+                            if base_path == "/":
+                                path = f"/{pagina['titulo'].replace(' ', '-')}"
+                            else:
+                                titulo_clean = pagina['titulo'].replace(' ', '-')
+                                if pagina.get('es_raiz', False):
+                                    path = f"{base_path}/{titulo_clean}"
+                                else:
+                                    padre = pagina.get('padre', '')
+                                    if padre:
+                                        padre_clean = padre.replace(' ', '-')
+                                        path = f"{base_path}/{padre_clean}/{titulo_clean}"
+                                    else:
+                                        path = f"{base_path}/{titulo_clean}"
+
+                        # Crear la página
+                        success, result = crear_pagina_wiki_azure(
+                            st.session_state.devops_org,
+                            st.session_state.devops_project,
+                            st.session_state.devops_pat,
+                            st.session_state.selected_wiki_id_crear,
+                            path,
+                            pagina['contenido_markdown']
+                        )
+
+                        if success:
+                            exitos += 1
+                            st.success(f"✅ Creada: {pagina['titulo']} → {path}")
+                        else:
+                            errores += 1
+                            st.error(f"❌ Error: {pagina['titulo']}")
+
+                    progress_bar.progress(1.0)
+                    status_text.text("¡Creación completada!")
+
+                    st.markdown("---")
+                    st.success(f"""
+                    **✅ Proceso completado**
+                    - Páginas creadas: {exitos}
+                    - Errores: {errores}
+                    - Total procesadas: {len(paginas_ordenadas)}
+                    """)
+
+                    # Botón para limpiar y empezar de nuevo
+                    if st.button("🔄 Crear otra wiki desde documento", key="reset_all_wiki_create"):
+                        st.session_state.wiki_create_doc_content = ""
+                        st.session_state.wiki_create_doc_filename = ""
+                        st.session_state.wiki_create_estructura_propuesta = None
+                        st.session_state.wiki_create_estructura_editada = None
+                        st.session_state.wiki_create_ready_to_create = False
+                        if 'available_wikis_crear' in st.session_state:
+                            del st.session_state.available_wikis_crear
+                        if 'wiki_estructura_existente' in st.session_state:
+                            del st.session_state.wiki_estructura_existente
+                        st.rerun()
 
 # ================= TAB 3: ANÁLISIS DOCUMENTOS =================
 with tab_doc:

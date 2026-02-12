@@ -1,8 +1,10 @@
 streamlit
+requests
 
 anthropic
 
 sentence-transformers>=2.7.0
 numpy>=1.26.0
 python-docx>=0.8.11
+PyPDF2>=3.0.0
 
