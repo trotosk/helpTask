@@ -563,10 +563,10 @@ def obtener_wikis_proyecto(organization, project, pat):
         st.error(f"❌ Error inesperado: {str(e)}")
         return []
 
-def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1):
+def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=5):
     """
-    Obtiene la lista de páginas de una wiki
-    recursion_level=1 muestra la estructura completa
+    Obtiene la lista de páginas de una wiki con toda su jerarquía
+    recursion_level: Niveles de profundidad a obtener (default 5 para obtener toda la estructura)
     """
     url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?recursionLevel={recursion_level}&api-version=7.1"
 
@@ -1044,7 +1044,7 @@ def obtener_estructura_paginas_wiki_existente(organization, project, pat, wiki_i
     """
     Obtiene la estructura de páginas existentes en la wiki para mostrar al usuario
     """
-    paginas = obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
+    paginas = obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=5)
 
     if not paginas:
         return []
