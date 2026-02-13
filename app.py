@@ -859,6 +859,111 @@ def leer_pdf_desde_bytes(file_bytes):
         st.error(f"Error al leer PDF: {str(e)}")
         return ""
 
+def detectar_encabezados_principales(contenido_documento):
+    """
+    Detecta automáticamente los encabezados principales del documento
+    Retorna lista de encabezados con su posición
+    """
+    lineas = contenido_documento.split('\n')
+    encabezados = []
+
+    for idx, linea in enumerate(lineas):
+        linea_limpia = linea.strip()
+
+        # Detectar encabezados por patrones comunes
+        es_encabezado = False
+
+        # Patrón 1: Números al inicio (1., 2., 1.1, etc.)
+        if re.match(r'^\d+\.(\d+\.)*\s+[A-Z]', linea_limpia):
+            es_encabezado = True
+
+        # Patrón 2: Todo en mayúsculas y largo suficiente
+        elif len(linea_limpia) > 5 and len(linea_limpia) < 100 and linea_limpia.isupper() and not linea_limpia.startswith('-'):
+            es_encabezado = True
+
+        # Patrón 3: Markdown headers (#, ##, ###)
+        elif re.match(r'^#{1,3}\s+', linea_limpia):
+            es_encabezado = True
+
+        # Patrón 4: Línea seguida de guiones/iguales (estilo rst)
+        elif idx < len(lineas) - 1:
+            siguiente = lineas[idx + 1].strip()
+            if len(linea_limpia) > 3 and len(linea_limpia) < 100:
+                if re.match(r'^[=\-]{3,}$', siguiente):
+                    es_encabezado = True
+
+        if es_encabezado and linea_limpia:
+            # Limpiar el título
+            titulo = re.sub(r'^\d+\.(\d+\.)*\s*', '', linea_limpia)
+            titulo = re.sub(r'^#+\s*', '', titulo)
+            titulo = titulo.strip()
+
+            if titulo and len(titulo) > 3:
+                encabezados.append({
+                    'titulo': titulo,
+                    'idx': idx,
+                    'linea_original': linea_limpia
+                })
+
+    return encabezados
+
+def dividir_documento_por_encabezados(contenido_documento, filename):
+    """
+    Divide el documento en secciones por encabezados detectados
+    Retorna estructura lista para crear wiki
+    """
+    encabezados = detectar_encabezados_principales(contenido_documento)
+
+    if not encabezados or len(encabezados) < 2:
+        # Si no hay encabezados, devolver documento completo
+        return {
+            "paginas": [
+                {
+                    "titulo": filename.replace('.docx', '').replace('.pdf', ''),
+                    "es_raiz": True,
+                    "padre": None,
+                    "contenido_markdown": f"# {filename}\n\n{contenido_documento}",
+                    "orden": 0
+                }
+            ]
+        }
+
+    lineas = contenido_documento.split('\n')
+    paginas = []
+
+    # Página índice
+    doc_titulo = filename.replace('.docx', '').replace('.pdf', '')
+    indice_contenido = f"# {doc_titulo}\n\n## Índice\n\n"
+    for enc in encabezados[:15]:
+        indice_contenido += f"- {enc['titulo']}\n"
+
+    paginas.append({
+        "titulo": "Índice",
+        "es_raiz": True,
+        "padre": None,
+        "contenido_markdown": indice_contenido,
+        "orden": 0
+    })
+
+    # Una página por cada encabezado con contenido literal
+    for i, encabezado in enumerate(encabezados):
+        inicio = encabezado['idx']
+        fin = encabezados[i + 1]['idx'] if i < len(encabezados) - 1 else len(lineas)
+
+        # Contenido literal de la sección
+        contenido_seccion = '\n'.join(lineas[inicio:fin])
+        contenido_markdown = f"# {encabezado['titulo']}\n\n{contenido_seccion.strip()}"
+
+        paginas.append({
+            "titulo": encabezado['titulo'][:50],
+            "es_raiz": False,
+            "padre": "Índice",
+            "contenido_markdown": contenido_markdown,
+            "orden": i + 1
+        })
+
+    return {"paginas": paginas}
+
 def extraer_contenido_seccion(contenido_documento, seccion_origen, titulo_pagina):
     """
     Extrae el contenido completo de una sección específica del documento
@@ -2024,11 +2129,12 @@ Cuando respondas:
 
                 modo_creacion = st.radio(
                     "Modo",
-                    options=["analisis", "simple_una_pagina", "simple_dos_paginas"],
+                    options=["analisis", "simple_una_pagina", "simple_dos_paginas", "dividir_por_encabezados"],
                     format_func=lambda x: {
                         "analisis": "✨ Analizar con Frida (estructura inteligente)",
                         "simple_una_pagina": "📄 Documento completo en 1 página (literal, sin análisis)",
-                        "simple_dos_paginas": "📑 2 páginas: Documento completo + Resumen"
+                        "simple_dos_paginas": "📑 2 páginas: Documento completo + Resumen",
+                        "dividir_por_encabezados": "📑 Dividir por encabezados (1 subpágina por punto principal)"
                     }[x],
                     help="Selecciona cómo organizar el contenido"
                 )
@@ -2135,6 +2241,35 @@ Cuando respondas:
                         st.session_state.wiki_create_ready_to_create = True
                         st.success("✅ Estructura creada: 2 páginas (Resumen + Documento completo)")
                         st.rerun()
+
+                # MODO DIVIDIR POR ENCABEZADOS
+                elif modo_creacion == "dividir_por_encabezados":
+                    st.markdown("""
+                    **📑 Modo dividir por encabezados:**
+                    - Detecta automáticamente los puntos principales del documento
+                    - Crea 1 subpágina por cada encabezado encontrado
+                    - Contenido literal de cada sección (sin análisis)
+                    - Página índice automática
+                    """)
+
+                    if st.button("📑 Dividir Automáticamente", use_container_width=True, key="dividir_encabezados"):
+                        with st.spinner("🔍 Detectando encabezados principales..."):
+                            estructura = dividir_documento_por_encabezados(
+                                st.session_state.wiki_create_doc_content,
+                                st.session_state.wiki_create_doc_filename
+                            )
+
+                        if estructura and "paginas" in estructura:
+                            num_paginas = len(estructura['paginas'])
+                            st.session_state.wiki_create_estructura_propuesta = estructura
+                            st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
+                            st.session_state.wiki_create_ready_to_create = True
+
+                            if num_paginas > 1:
+                                st.success(f"✅ Estructura creada: {num_paginas} páginas (1 índice + {num_paginas-1} secciones)")
+                            else:
+                                st.warning("⚠️ No se detectaron encabezados suficientes. Se creó 1 página con todo el contenido.")
+                            st.rerun()
 
         # === PASO 3: REVISAR Y EDITAR ESTRUCTURA ===
         if st.session_state.wiki_create_estructura_propuesta:
