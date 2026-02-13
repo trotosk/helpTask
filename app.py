@@ -2017,40 +2017,124 @@ Cuando respondas:
                         st.session_state.wiki_create_ready_to_create = False
                         st.rerun()
 
-        # === PASO 2: ANÁLISIS CON FRIDA ===
+        # === PASO 2: ANÁLISIS CON FRIDA O MODO SIMPLE ===
         if st.session_state.wiki_create_doc_content:
-            with st.expander("🧠 Paso 2: Analizar con Frida y Proponer Estructura", expanded=(not st.session_state.wiki_create_estructura_propuesta)):
-                st.markdown("""
-                **Frida analizará el documento y propondrá:**
-                - Una página principal de índice/resumen
-                - Páginas para secciones principales
-                - Subpáginas para detalles específicos
-                - Contenido mejorado en formato markdown
-                """)
+            with st.expander("🧠 Paso 2: Elegir Modo de Creación", expanded=(not st.session_state.wiki_create_estructura_propuesta)):
+                st.markdown("**Elige cómo quieres organizar el contenido en la wiki:**")
 
-                col_analizar, col_reset = st.columns([3, 1])
+                modo_creacion = st.radio(
+                    "Modo",
+                    options=["analisis", "simple_una_pagina", "simple_dos_paginas"],
+                    format_func=lambda x: {
+                        "analisis": "✨ Analizar con Frida (estructura inteligente)",
+                        "simple_una_pagina": "📄 Documento completo en 1 página (literal, sin análisis)",
+                        "simple_dos_paginas": "📑 2 páginas: Documento completo + Resumen"
+                    }[x],
+                    help="Selecciona cómo organizar el contenido"
+                )
 
-                with col_analizar:
-                    if st.button("✨ Analizar con Frida y Proponer Estructura", use_container_width=True, key="analizar_frida"):
-                        estructura = analizar_documento_con_frida(
-                            st.session_state.wiki_create_doc_content,
-                            st.session_state.wiki_create_doc_filename
-                        )
+                st.markdown("---")
 
-                        if estructura and "paginas" in estructura:
-                            st.session_state.wiki_create_estructura_propuesta = estructura
-                            st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))  # Deep copy
-                            st.success(f"✅ Estructura propuesta: {len(estructura['paginas'])} páginas")
-                            st.rerun()
-                        else:
-                            st.error("❌ No se pudo generar estructura. Intenta de nuevo.")
+                # MODO ANÁLISIS CON FRIDA
+                if modo_creacion == "analisis":
+                    st.markdown("""
+                    **Frida analizará el documento y propondrá:**
+                    - Estructura jerárquica de páginas
+                    - Página de resumen ejecutivo
+                    - Contenido completo extraído por secciones
+                    - Página de glosario (si aplica)
+                    """)
 
-                with col_reset:
-                    if st.session_state.wiki_create_estructura_propuesta:
-                        if st.button("🔄 Re-analizar", use_container_width=True, key="reanalizar_frida"):
-                            st.session_state.wiki_create_estructura_propuesta = None
-                            st.session_state.wiki_create_estructura_editada = None
-                            st.rerun()
+                    col_analizar, col_reset = st.columns([3, 1])
+
+                    with col_analizar:
+                        if st.button("✨ Analizar con Frida", use_container_width=True, key="analizar_frida"):
+                            estructura = analizar_documento_con_frida(
+                                st.session_state.wiki_create_doc_content,
+                                st.session_state.wiki_create_doc_filename
+                            )
+
+                            if estructura and "paginas" in estructura:
+                                st.session_state.wiki_create_estructura_propuesta = estructura
+                                st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
+                                st.success(f"✅ Estructura propuesta: {len(estructura['paginas'])} páginas")
+                                st.rerun()
+                            else:
+                                st.error("❌ No se pudo generar estructura. Intenta de nuevo.")
+
+                    with col_reset:
+                        if st.session_state.wiki_create_estructura_propuesta:
+                            if st.button("🔄 Re-analizar", use_container_width=True, key="reanalizar_frida"):
+                                st.session_state.wiki_create_estructura_propuesta = None
+                                st.session_state.wiki_create_estructura_editada = None
+                                st.rerun()
+
+                # MODO SIMPLE: UNA PÁGINA
+                elif modo_creacion == "simple_una_pagina":
+                    st.markdown("""
+                    **📄 Modo simple:**
+                    - Todo el contenido del documento en una sola página
+                    - Sin análisis, sin modificaciones
+                    - Contenido literal del documento
+                    """)
+
+                    if st.button("📄 Crear Estructura Simple (1 página)", use_container_width=True, key="crear_simple_1"):
+                        estructura = {
+                            "paginas": [
+                                {
+                                    "titulo": st.session_state.wiki_create_doc_filename.replace('.docx', '').replace('.pdf', ''),
+                                    "es_raiz": True,
+                                    "padre": None,
+                                    "contenido_markdown": f"# {st.session_state.wiki_create_doc_filename}\n\n{st.session_state.wiki_create_doc_content}",
+                                    "orden": 0
+                                }
+                            ]
+                        }
+                        st.session_state.wiki_create_estructura_propuesta = estructura
+                        st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
+                        st.session_state.wiki_create_ready_to_create = True
+                        st.success("✅ Estructura creada: 1 página con todo el contenido")
+                        st.rerun()
+
+                # MODO SIMPLE: DOS PÁGINAS
+                elif modo_creacion == "simple_dos_paginas":
+                    st.markdown("""
+                    **📑 Modo 2 páginas:**
+                    - Página 1: Resumen ejecutivo (generado por Frida)
+                    - Página 2: Documento completo (contenido literal)
+                    """)
+
+                    if st.button("📑 Crear Estructura (2 páginas)", use_container_width=True, key="crear_simple_2"):
+                        with st.spinner("Generando resumen..."):
+                            resumen = generar_resumen_documento(
+                                st.session_state.wiki_create_doc_content,
+                                st.session_state.wiki_create_doc_filename
+                            )
+
+                        doc_titulo = st.session_state.wiki_create_doc_filename.replace('.docx', '').replace('.pdf', '')
+                        estructura = {
+                            "paginas": [
+                                {
+                                    "titulo": "Resumen",
+                                    "es_raiz": True,
+                                    "padre": None,
+                                    "contenido_markdown": resumen,
+                                    "orden": 0
+                                },
+                                {
+                                    "titulo": doc_titulo,
+                                    "es_raiz": False,
+                                    "padre": "Resumen",
+                                    "contenido_markdown": f"# {doc_titulo}\n\n{st.session_state.wiki_create_doc_content}",
+                                    "orden": 1
+                                }
+                            ]
+                        }
+                        st.session_state.wiki_create_estructura_propuesta = estructura
+                        st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
+                        st.session_state.wiki_create_ready_to_create = True
+                        st.success("✅ Estructura creada: 2 páginas (Resumen + Documento completo)")
+                        st.rerun()
 
         # === PASO 3: REVISAR Y EDITAR ESTRUCTURA ===
         if st.session_state.wiki_create_estructura_propuesta:
@@ -2262,37 +2346,43 @@ Cuando respondas:
                     exitos = 0
                     errores = 0
 
+                    # Mapa para tracking de paths reales de páginas creadas
+                    titulo_a_path = {}
+
                     for idx, pagina in enumerate(paginas_ordenadas):
                         progress_bar.progress((idx + 1) / len(paginas_ordenadas))
                         status_text.text(f"Creando: {pagina['titulo']} ({idx + 1}/{len(paginas_ordenadas)})")
 
-                        # Construir path
+                        titulo_clean = pagina['titulo'].replace(' ', '-')
+
+                        # Construir path correctamente usando el mapa de paths
                         if st.session_state.wiki_create_modo == "nueva":
                             # Modo nueva: crear desde raíz
                             if pagina.get('es_raiz', False):
-                                path = f"/{pagina['titulo'].replace(' ', '-')}"
+                                path = f"/{titulo_clean}"
                             else:
-                                padre = pagina.get('padre', '')
-                                if padre:
-                                    padre_clean = padre.replace(' ', '-')
-                                    titulo_clean = pagina['titulo'].replace(' ', '-')
-                                    path = f"/{padre_clean}/{titulo_clean}"
+                                padre_titulo = pagina.get('padre', '')
+                                if padre_titulo and padre_titulo in titulo_a_path:
+                                    # Usar el path real del padre desde el mapa
+                                    path_padre = titulo_a_path[padre_titulo]
+                                    path = f"{path_padre}/{titulo_clean}"
                                 else:
-                                    path = f"/{pagina['titulo'].replace(' ', '-')}"
+                                    # Fallback: asumir que está en la raíz
+                                    path = f"/{titulo_clean}"
                         else:
                             # Modo extender: añadir bajo página padre
                             base_path = st.session_state.wiki_create_pagina_padre
                             if base_path == "/":
-                                path = f"/{pagina['titulo'].replace(' ', '-')}"
+                                path = f"/{titulo_clean}"
                             else:
-                                titulo_clean = pagina['titulo'].replace(' ', '-')
                                 if pagina.get('es_raiz', False):
                                     path = f"{base_path}/{titulo_clean}"
                                 else:
-                                    padre = pagina.get('padre', '')
-                                    if padre:
-                                        padre_clean = padre.replace(' ', '-')
-                                        path = f"{base_path}/{padre_clean}/{titulo_clean}"
+                                    padre_titulo = pagina.get('padre', '')
+                                    if padre_titulo and padre_titulo in titulo_a_path:
+                                        # Usar el path real del padre
+                                        path_padre = titulo_a_path[padre_titulo]
+                                        path = f"{path_padre}/{titulo_clean}"
                                     else:
                                         path = f"{base_path}/{titulo_clean}"
 
@@ -2308,6 +2398,8 @@ Cuando respondas:
 
                         if success:
                             exitos += 1
+                            # Guardar el path real en el mapa
+                            titulo_a_path[pagina['titulo']] = path
                             st.success(f"✅ Creada: {pagina['titulo']} → {path}")
                         else:
                             errores += 1
