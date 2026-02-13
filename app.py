@@ -607,14 +607,17 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
         def aplanar_paginas(page, nivel=0):
             paginas = []
 
-            # Añadir página actual si tiene ID
-            if page.get('id'):
+            # Añadir página actual si tiene path (excluyendo la raíz "/")
+            # Usamos path como identificador ya que no todas las respuestas tienen 'id'
+            page_path = page.get('path', '')
+            if page_path and page_path != '/':
                 paginas.append({
-                    "id": page.get("id"),
-                    "path": page.get("path", ""),
+                    "id": page.get("id", page_path),  # Usar path si no hay id
+                    "path": page_path,
                     "order": page.get("order", 0),
                     "gitItemPath": page.get("gitItemPath", ""),
-                    "url": page.get("url", "")
+                    "url": page.get("url", ""),
+                    "isParentPage": page.get("isParentPage", False)
                 })
 
             # Procesar subpáginas si existen
@@ -625,17 +628,17 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
             return paginas
 
         # Si hay páginas, aplanarlas
-        if "id" in data or "subPages" in data:
+        if "path" in data or "subPages" in data:
             paginas_encontradas = aplanar_paginas(data)
 
             if paginas_encontradas:
                 st.success(f"✅ Se encontraron {len(paginas_encontradas)} página(s)")
             else:
-                st.warning("⚠️ Se procesó la respuesta pero no se encontraron páginas con ID")
+                st.warning("⚠️ Se procesó la respuesta pero no se encontraron páginas válidas")
 
             return paginas_encontradas
         else:
-            st.warning("⚠️ La respuesta no tiene 'id' ni 'subPages' en la raíz")
+            st.warning("⚠️ La respuesta no tiene 'path' ni 'subPages' en la raíz")
             st.write("**Claves disponibles:**", list(data.keys()) if isinstance(data, dict) else "No es un diccionario")
             return []
 
@@ -652,9 +655,14 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
 def obtener_contenido_pagina_wiki(organization, project, pat, wiki_id, page_id):
     """
     Obtiene el contenido de una página específica de la wiki
+    page_id puede ser el ID numérico o el path de la página
     """
-    # Usar el page_id directamente en la URL con includeContent=true
-    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages/{page_id}?includeContent=true&api-version=7.1"
+    # Si page_id es un path (empieza con /), usar parámetro path
+    if isinstance(page_id, str) and page_id.startswith('/'):
+        url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?path={page_id}&includeContent=true&api-version=7.1"
+    else:
+        # Si es un ID numérico, usar la ruta tradicional
+        url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages/{page_id}?includeContent=true&api-version=7.1"
 
     credentials = f":{pat}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
