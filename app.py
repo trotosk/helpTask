@@ -887,6 +887,8 @@ def analizar_documento_con_frida(contenido_documento, filename):
 - Páginas auxiliares (glosario, FAQs, referencias) si aplica
 
 **Formato de respuesta (JSON):**
+IMPORTANTE: Genera JSON VÁLIDO. Todos los saltos de línea deben ser \\n (escapados).
+
 ```json
 {{
   "paginas": [
@@ -894,26 +896,33 @@ def analizar_documento_con_frida(contenido_documento, filename):
       "titulo": "Índice y Resumen General",
       "es_raiz": true,
       "padre": null,
-      "contenido_markdown": "# Resumen del Proyecto\\n\\nEste documento describe...",
+      "contenido_markdown": "# Resumen del Proyecto\\n\\nEste documento describe...\\n\\n## Contenido\\n- Item 1\\n- Item 2",
       "orden": 0
     }},
     {{
       "titulo": "Introducción",
       "es_raiz": false,
       "padre": "Índice y Resumen General",
-      "contenido_markdown": "## Introducción\\n\\nObjetivos del proyecto...",
+      "contenido_markdown": "## Introducción\\n\\nObjetivos del proyecto son:\\n\\n- Objetivo 1\\n- Objetivo 2",
       "orden": 1
     }}
   ]
 }}
 ```
 
-**Importante:**
+**CRÍTICO - Reglas de JSON:**
+1. El contenido_markdown debe ser una sola línea
+2. Usa \\n para saltos de línea (NO saltos de línea reales)
+3. Escapa comillas dobles dentro del contenido como \\"
+4. NO uses comillas simples, solo dobles
+5. Limita el contenido de cada página a máximo 500 caracteres
+6. Si el contenido es largo, divídelo en más páginas
+
+**Otras reglas:**
+- Máximo 15 páginas total
 - Usa markdown para el contenido
-- Mejora la redacción y claridad del contenido original
-- Organiza la información de forma lógica
-- No crees demasiadas páginas (máximo 15)
-- Cada página debe tener contenido sustancial"""
+- Mejora la redacción y claridad
+- Organiza lógicamente"""
 
     payload = {
         "model": st.session_state.model,
@@ -1521,6 +1530,9 @@ Cuando respondas:
 
                     # Botón para listar páginas
                     if st.button("📄 Listar Páginas de esta Wiki"):
+                        # Guardar logs en session_state para mostrar en col2
+                        st.session_state.wiki_logs = []
+
                         with st.spinner("Obteniendo páginas principales..."):
                             paginas = obtener_paginas_wiki(
                                 st.session_state.devops_org,
@@ -1533,6 +1545,7 @@ Cuando respondas:
                             # Obtener subpáginas para cada página padre
                             todas_paginas = []
                             total_principales = len(paginas)
+                            st.session_state.wiki_logs.append(("info", f"📊 Páginas principales: {total_principales}"))
 
                             for idx, pagina in enumerate(paginas):
                                 todas_paginas.append(pagina)
@@ -1549,13 +1562,15 @@ Cuando respondas:
                                         )
 
                                         if subpaginas:
-                                            st.info(f"  └─ +{len(subpaginas)} subpágina(s) encontradas")
+                                            st.session_state.wiki_logs.append(("info", f"  └─ {pagina['path']}: +{len(subpaginas)} subpágina(s)"))
                                             todas_paginas.extend(subpaginas)
 
                             st.session_state.available_wiki_pages = todas_paginas
-                            st.success(f"✅ {len(todas_paginas)} página(s) total ({total_principales} principales + {len(todas_paginas) - total_principales} subpáginas)")
+                            st.session_state.wiki_logs.append(("success", f"✅ Total: {len(todas_paginas)} página(s) ({total_principales} principales + {len(todas_paginas) - total_principales} subpáginas)"))
+                            st.rerun()
                         else:
-                            st.warning("⚠️ No se encontraron páginas en esta wiki")
+                            st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas en esta wiki"))
+                            st.rerun()
 
                     # Selector de páginas (individual + batch)
                     if 'available_wiki_pages' in st.session_state and st.session_state.available_wiki_pages:
@@ -1607,7 +1622,20 @@ Cuando respondas:
 
                 st.markdown("---")
                 st.markdown("#### 📊 Logs y Debug")
-                # Este contenedor mostrará logs de debug automáticamente
+
+                # Mostrar logs guardados
+                if hasattr(st.session_state, 'wiki_logs') and st.session_state.wiki_logs:
+                    for log_type, log_message in st.session_state.wiki_logs:
+                        if log_type == "info":
+                            st.info(log_message)
+                        elif log_type == "success":
+                            st.success(log_message)
+                        elif log_type == "warning":
+                            st.warning(log_message)
+                        elif log_type == "error":
+                            st.error(log_message)
+                else:
+                    st.text("No hay logs disponibles")
 
             st.markdown("---")
 
