@@ -590,34 +590,54 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=1)
 
         data = response.json()
 
-        # Función recursiva para aplanar la estructura de páginas
-        def aplanar_paginas(page, path=""):
-            paginas = []
-            current_path = f"{path}/{page.get('path', '')}" if path else page.get('path', '')
+        # DEBUG: Mostrar estructura de respuesta
+        with st.expander("🔍 DEBUG - Ver respuesta de la API", expanded=False):
+            st.write("**Status Code:**", response.status_code)
+            st.write("**Estructura de la respuesta:**")
+            st.json(data)
+            if data:
+                st.write("**Claves en el nivel raíz:**", list(data.keys()))
 
-            # Solo añadir si tiene ID (las páginas reales tienen ID)
+        # Verificar si hay páginas
+        if not data:
+            st.warning("⚠️ La respuesta de la API está vacía")
+            return []
+
+        # Función recursiva para aplanar la estructura de páginas
+        def aplanar_paginas(page, nivel=0):
+            paginas = []
+
+            # Añadir página actual si tiene ID
             if page.get('id'):
                 paginas.append({
                     "id": page.get("id"),
-                    "path": current_path,
+                    "path": page.get("path", ""),
                     "order": page.get("order", 0),
                     "gitItemPath": page.get("gitItemPath", ""),
                     "url": page.get("url", "")
                 })
 
-            # Procesar subpáginas
-            if "subPages" in page:
+            # Procesar subpáginas si existen
+            if "subPages" in page and page["subPages"]:
                 for subpage in page["subPages"]:
-                    paginas.extend(aplanar_paginas(subpage, current_path))
+                    paginas.extend(aplanar_paginas(subpage, nivel + 1))
 
             return paginas
 
         # Si hay páginas, aplanarlas
-        # La respuesta puede tener 'id' o directamente 'subPages' en la raíz
         if "id" in data or "subPages" in data:
-            return aplanar_paginas(data)
+            paginas_encontradas = aplanar_paginas(data)
 
-        return []
+            if paginas_encontradas:
+                st.success(f"✅ Se encontraron {len(paginas_encontradas)} página(s)")
+            else:
+                st.warning("⚠️ Se procesó la respuesta pero no se encontraron páginas con ID")
+
+            return paginas_encontradas
+        else:
+            st.warning("⚠️ La respuesta no tiene 'id' ni 'subPages' en la raíz")
+            st.write("**Claves disponibles:**", list(data.keys()) if isinstance(data, dict) else "No es un diccionario")
+            return []
 
     except requests.exceptions.RequestException as e:
         if hasattr(e, 'response') and e.response is not None:
