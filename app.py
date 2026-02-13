@@ -563,6 +563,58 @@ def obtener_wikis_proyecto(organization, project, pat):
         st.error(f"❌ Error inesperado: {str(e)}")
         return []
 
+def obtener_subpaginas_especificas(organization, project, pat, wiki_id, page_path):
+    """
+    Obtiene las subpáginas de una página específica
+    """
+    import urllib.parse
+    path_encoded = urllib.parse.quote(page_path, safe='')
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?path={path_encoded}&recursionLevel=5&includeContent=false&api-version=7.1"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+
+        # Función para aplanar subpáginas
+        def aplanar_subpaginas(page):
+            paginas = []
+
+            # Procesar subpáginas si existen
+            if "subPages" in page and page["subPages"]:
+                for subpage in page["subPages"]:
+                    page_path = subpage.get('path', '')
+                    if page_path:
+                        paginas.append({
+                            "id": subpage.get("id", page_path),
+                            "path": page_path,
+                            "order": subpage.get("order", 0),
+                            "gitItemPath": subpage.get("gitItemPath", ""),
+                            "url": subpage.get("url", ""),
+                            "isParentPage": subpage.get("isParentPage", False)
+                        })
+                    # Recursivamente obtener subpáginas de subpáginas
+                    paginas.extend(aplanar_subpaginas(subpage))
+
+            return paginas
+
+        return aplanar_subpaginas(data)
+
+    except Exception as e:
+        st.warning(f"⚠️ Error al obtener subpáginas de {page_path}: {str(e)}")
+        return []
+
 def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=5):
     """
     Obtiene la lista de páginas de una wiki con toda su jerarquía
@@ -1469,7 +1521,7 @@ Cuando respondas:
 
                     # Botón para listar páginas
                     if st.button("📄 Listar Páginas de esta Wiki"):
-                        with st.spinner("Obteniendo páginas..."):
+                        with st.spinner("Obteniendo páginas principales..."):
                             paginas = obtener_paginas_wiki(
                                 st.session_state.devops_org,
                                 st.session_state.devops_project,
@@ -1478,27 +1530,30 @@ Cuando respondas:
                             )
 
                         if paginas:
-                            # Verificar si hay páginas padre y obtener sus subpáginas
-                            paginas_expandidas = []
-                            for pagina in paginas:
-                                paginas_expandidas.append(pagina)
-                                # Si es página padre, intentar obtener sus subpáginas explícitamente
+                            # Obtener subpáginas para cada página padre
+                            todas_paginas = []
+                            total_principales = len(paginas)
+
+                            for idx, pagina in enumerate(paginas):
+                                todas_paginas.append(pagina)
+
+                                # Si es página padre, obtener sus subpáginas
                                 if pagina.get('isParentPage', False):
-                                    with st.spinner(f"Obteniendo subpáginas de {pagina['path']}..."):
-                                        subpaginas = obtener_paginas_wiki(
+                                    with st.spinner(f"📁 Obteniendo subpáginas de {pagina['path']} ({idx+1}/{total_principales})..."):
+                                        subpaginas = obtener_subpaginas_especificas(
                                             st.session_state.devops_org,
                                             st.session_state.devops_project,
                                             st.session_state.devops_pat,
                                             st.session_state.selected_wiki_id,
-                                            recursion_level=5
+                                            pagina['path']
                                         )
-                                        # Filtrar solo las que son hijas de esta página
-                                        for subpagina in subpaginas:
-                                            if subpagina['path'].startswith(pagina['path'] + '/') and subpagina not in paginas_expandidas:
-                                                paginas_expandidas.append(subpagina)
 
-                            st.session_state.available_wiki_pages = paginas_expandidas
-                            st.success(f"✅ {len(paginas_expandidas)} página(s) encontrada(s) (incluyendo subpáginas)")
+                                        if subpaginas:
+                                            st.info(f"  └─ +{len(subpaginas)} subpágina(s) encontradas")
+                                            todas_paginas.extend(subpaginas)
+
+                            st.session_state.available_wiki_pages = todas_paginas
+                            st.success(f"✅ {len(todas_paginas)} página(s) total ({total_principales} principales + {len(todas_paginas) - total_principales} subpáginas)")
                         else:
                             st.warning("⚠️ No se encontraron páginas en esta wiki")
 
