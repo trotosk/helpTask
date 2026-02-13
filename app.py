@@ -1137,139 +1137,66 @@ with tab_devops:
     st.markdown("Consulta work items y documentación Wiki de Azure DevOps usando IA")
 
     # Configuración de Azure DevOps (compartida entre subtabs)
-    with st.expander("⚙️ Configuración Azure DevOps", expanded=(not st.session_state.devops_indexed and not st.session_state.wiki_indexed)):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("#### 🔗 Conexión")
+    with st.expander("⚙️ Configuración Azure DevOps", expanded=(not st.session_state.devops_org)):
+        st.markdown("#### 🔗 Conexión a Azure DevOps")
+
+        col_conn1, col_conn2 = st.columns([2, 1])
+
+        with col_conn1:
             org_input = st.text_input(
                 "Organización",
                 value=st.session_state.devops_org if st.session_state.devops_org else "TelepizzaIT",
-                placeholder="ej: TelepizzaIT"
+                placeholder="ej: TelepizzaIT",
+                key="org_input_shared"
             )
             project_input = st.text_input(
                 "Proyecto",
                 value=st.session_state.devops_project if st.session_state.devops_project else "Sales",
-                placeholder="ej: Sales"
+                placeholder="ej: Sales",
+                key="project_input_shared"
             )
             pat_input = st.text_input(
                 "Personal Access Token (PAT)",
                 value=st.session_state.devops_pat,
                 type="password",
-                help="PAT con permisos: Work Items (Read) + Wiki (Read) o Code (Read)"
+                help="PAT con permisos: Work Items (Read) + Wiki (Read) o Code (Read)",
+                key="pat_input_shared"
             )
 
-            # Información sobre permisos necesarios
-            with st.expander("ℹ️ Permisos necesarios del PAT"):
-                st.markdown("""
-                **Para Work Items:**
-                - ✅ Work Items (Read)
-
-                **Para Wiki:**
-                - ✅ Wiki (Read)
-                - O alternativamente: Code (Read)
-
-                **Cómo crear/editar un PAT:**
-                1. Azure DevOps → User Settings (arriba derecha) → Personal Access Tokens
-                2. New Token o edita uno existente
-                3. Selecciona los scopes necesarios
-                4. Copia el token y pégalo arriba
-                """)
-        
-        with col2:
-            st.markdown("#### 🎛️ Filtros")
-            work_item_types = st.multiselect(
-                "Tipos de Work Items",
-                options=["Bug", "User Story", "Task", "Feature", "Epic", "Issue", "Test Case"],
-                default=["Bug"],
-                help="Selecciona uno o más tipos"
-            )
-            
-            area_path_input = st.text_input(
-                "Área (opcional)",
-                value="",
-                placeholder="ej: Sales\\MySaga POC",
-                help="Deja vacío para todas las áreas"
-            )
-            
-            max_items = st.slider(
-                "Límite de items a traer",
-                min_value=50,
-                max_value=1000,
-                value=200,
-                step=50,
-                help="Máximo de work items a sincronizar"
-            )
-            
-            top_k_similar = st.slider(
-                "Items similares a mostrar",
-                min_value=3,
-                max_value=10,
-                value=5,
-                step=1,
-                help="Número de items similares para enviar a Frida"
-            )
-        
-        st.markdown("---")
-        
-        col_btn1, col_btn2 = st.columns([3, 1])
-        with col_btn1:
-            if st.button("🔄 Sincronizar e Indexar Work Items", use_container_width=True):
+        with col_conn2:
+            st.markdown("#### ")
+            st.markdown("#### ")
+            if st.button("💾 Guardar Conexión", use_container_width=True, type="primary"):
                 if not org_input or not project_input or not pat_input:
-                    st.error("❌ Completa organización, proyecto y PAT")
-                elif not work_item_types or len(work_item_types) == 0:
-                    st.error("❌ Selecciona al menos un tipo de work item")
+                    st.error("❌ Completa todos los campos")
                 else:
                     st.session_state.devops_org = org_input
                     st.session_state.devops_project = project_input
                     st.session_state.devops_pat = pat_input
-                    
-                    with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
-                        incidencias = obtener_incidencias_devops(
-                            org_input, 
-                            project_input, 
-                            pat_input,
-                            area_path=area_path_input if area_path_input else None,
-                            work_item_types=work_item_types,
-                            max_items=max_items
-                        )
-                    
-                    if incidencias:
-                        st.success(f"✅ Se encontraron {len(incidencias)} work items")
-                        
-                        tipos_count = {}
-                        for inc in incidencias:
-                            tipo = inc['tipo']
-                            tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
-                        
-                        st.info(f"📊 Distribución: " + ", ".join([f"{t}: {c}" for t, c in tipos_count.items()]))
-                        
-                        st.session_state.devops_incidencias = incidencias
-                        
-                        if st.session_state.embedding_model is None:
-                            st.session_state.embedding_model = cargar_modelo_embeddings()
-                        
-                        embeddings = generar_embeddings_incidencias(
-                            incidencias, 
-                            st.session_state.embedding_model
-                        )
-                        st.session_state.devops_embeddings = embeddings
-                        st.session_state.devops_indexed = True
-                        st.session_state.devops_top_k = top_k_similar
-                        
-                        st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ No se encontraron work items o hubo un error")
-        
-        with col_btn2:
-            if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_devops"):
-                st.session_state.devops_incidencias = []
-                st.session_state.devops_embeddings = None
-                st.session_state.devops_indexed = False
-                st.session_state.devops_messages = []
-                st.success("✅ Cache limpiado")
-                st.rerun()
+                    st.success("✅ Conexión guardada")
+                    st.rerun()
+
+            if st.session_state.devops_org and st.session_state.devops_project:
+                st.success("✅ Conectado")
+                st.info(f"**Org:** {st.session_state.devops_org}")
+                st.info(f"**Proyecto:** {st.session_state.devops_project}")
+
+        # Información sobre permisos necesarios
+        with st.expander("ℹ️ Permisos necesarios del PAT"):
+            st.markdown("""
+            **Para Work Items:**
+            - ✅ Work Items (Read)
+
+            **Para Wiki:**
+            - ✅ Wiki (Read)
+            - O alternativamente: Code (Read)
+
+            **Cómo crear/editar un PAT:**
+            1. Azure DevOps → User Settings (arriba derecha) → Personal Access Tokens
+            2. New Token o edita uno existente
+            3. Selecciona los scopes necesarios
+            4. Copia el token y pégalo arriba
+            """)
 
     st.markdown("---")
 
@@ -1282,6 +1209,104 @@ with tab_devops:
 
     # ================= SUBTAB 1: CONSULTA WORK ITEMS =================
     with subtab_workitems:
+        # Verificar conexión
+        if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
+            st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
+            st.stop()
+
+        # Configuración de sincronización
+        with st.expander("🎛️ Filtros y Sincronización de Work Items", expanded=not st.session_state.devops_indexed):
+            col_filtros1, col_filtros2 = st.columns(2)
+
+            with col_filtros1:
+                work_item_types = st.multiselect(
+                    "Tipos de Work Items",
+                    options=["Bug", "User Story", "Task", "Feature", "Epic", "Issue", "Test Case"],
+                    default=["Bug"],
+                    help="Selecciona uno o más tipos"
+                )
+
+                area_path_input = st.text_input(
+                    "Área (opcional)",
+                    value="",
+                    placeholder="ej: Sales\\MySaga POC",
+                    help="Deja vacío para todas las áreas"
+                )
+
+            with col_filtros2:
+                max_items = st.slider(
+                    "Límite de items a traer",
+                    min_value=50,
+                    max_value=1000,
+                    value=200,
+                    step=50,
+                    help="Máximo de work items a sincronizar"
+                )
+
+                top_k_similar = st.slider(
+                    "Items similares a mostrar",
+                    min_value=3,
+                    max_value=10,
+                    value=5,
+                    step=1,
+                    help="Número de items similares para enviar a Frida"
+                )
+
+            st.markdown("---")
+
+            col_btn1, col_btn2 = st.columns([3, 1])
+            with col_btn1:
+                if st.button("🔄 Sincronizar e Indexar Work Items", use_container_width=True):
+                    if not work_item_types or len(work_item_types) == 0:
+                        st.error("❌ Selecciona al menos un tipo de work item")
+                    else:
+                        with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
+                            incidencias = obtener_incidencias_devops(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat,
+                                area_path=area_path_input if area_path_input else None,
+                                work_item_types=work_item_types,
+                                max_items=max_items
+                            )
+
+                        if incidencias:
+                            st.success(f"✅ Se encontraron {len(incidencias)} work items")
+
+                            tipos_count = {}
+                            for inc in incidencias:
+                                tipo = inc['tipo']
+                                tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
+
+                            st.info(f"📊 Distribución: " + ", ".join([f"{t}: {c}" for t, c in tipos_count.items()]))
+
+                            st.session_state.devops_incidencias = incidencias
+
+                            if st.session_state.embedding_model is None:
+                                st.session_state.embedding_model = cargar_modelo_embeddings()
+
+                            embeddings = generar_embeddings_incidencias(
+                                incidencias,
+                                st.session_state.embedding_model
+                            )
+                            st.session_state.devops_embeddings = embeddings
+                            st.session_state.devops_indexed = True
+                            st.session_state.devops_top_k = top_k_similar
+
+                            st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ No se encontraron work items o hubo un error")
+
+            with col_btn2:
+                if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_devops"):
+                    st.session_state.devops_incidencias = []
+                    st.session_state.devops_embeddings = None
+                    st.session_state.devops_indexed = False
+                    st.session_state.devops_messages = []
+                    st.success("✅ Cache limpiado")
+                    st.rerun()
+
         # Estado de indexación
         if st.session_state.devops_indexed:
             tipos_en_cache = {}
@@ -1453,8 +1478,27 @@ Cuando respondas:
                             )
 
                         if paginas:
-                            st.session_state.available_wiki_pages = paginas
-                            st.success(f"✅ {len(paginas)} página(s) encontrada(s)")
+                            # Verificar si hay páginas padre y obtener sus subpáginas
+                            paginas_expandidas = []
+                            for pagina in paginas:
+                                paginas_expandidas.append(pagina)
+                                # Si es página padre, intentar obtener sus subpáginas explícitamente
+                                if pagina.get('isParentPage', False):
+                                    with st.spinner(f"Obteniendo subpáginas de {pagina['path']}..."):
+                                        subpaginas = obtener_paginas_wiki(
+                                            st.session_state.devops_org,
+                                            st.session_state.devops_project,
+                                            st.session_state.devops_pat,
+                                            st.session_state.selected_wiki_id,
+                                            recursion_level=5
+                                        )
+                                        # Filtrar solo las que son hijas de esta página
+                                        for subpagina in subpaginas:
+                                            if subpagina['path'].startswith(pagina['path'] + '/') and subpagina not in paginas_expandidas:
+                                                paginas_expandidas.append(subpagina)
+
+                            st.session_state.available_wiki_pages = paginas_expandidas
+                            st.success(f"✅ {len(paginas_expandidas)} página(s) encontrada(s) (incluyendo subpáginas)")
                         else:
                             st.warning("⚠️ No se encontraron páginas en esta wiki")
 
@@ -1505,6 +1549,10 @@ Cuando respondas:
                     step=1,
                     help="Número de fragmentos a usar como contexto"
                 )
+
+                st.markdown("---")
+                st.markdown("#### 📊 Logs y Debug")
+                # Este contenedor mostrará logs de debug automáticamente
 
             st.markdown("---")
 
