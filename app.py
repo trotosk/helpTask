@@ -859,77 +859,204 @@ def leer_pdf_desde_bytes(file_bytes):
         st.error(f"Error al leer PDF: {str(e)}")
         return ""
 
+def extraer_contenido_seccion(contenido_documento, seccion_origen, titulo_pagina):
+    """
+    Extrae el contenido completo de una sección específica del documento
+    """
+    if not seccion_origen:
+        return f"# {titulo_pagina}\n\n[Contenido pendiente de asignar]"
+
+    # Buscar por los encabezados posibles
+    posibles_encabezados = [s.strip() for s in seccion_origen.split('|')]
+
+    # Dividir el documento en líneas
+    lineas = contenido_documento.split('\n')
+
+    # Buscar el inicio de la sección
+    inicio_idx = None
+    for idx, linea in enumerate(lineas):
+        linea_limpia = linea.strip()
+        for encabezado in posibles_encabezados:
+            if encabezado.lower() in linea_limpia.lower():
+                inicio_idx = idx
+                break
+        if inicio_idx is not None:
+            break
+
+    if inicio_idx is None:
+        # Si no se encuentra, devolver una porción del documento
+        return f"# {titulo_pagina}\n\n{contenido_documento[:3000]}"
+
+    # Buscar el final de la sección (siguiente encabezado principal o final del documento)
+    fin_idx = len(lineas)
+    for idx in range(inicio_idx + 1, len(lineas)):
+        linea = lineas[idx].strip()
+        # Detectar encabezados (números, mayúsculas, etc.)
+        if (linea and (
+            re.match(r'^\d+\.', linea) or  # Empieza con número
+            (len(linea) > 10 and linea.isupper()) or  # Todo mayúsculas
+            linea.startswith('#')  # Markdown header
+        )):
+            fin_idx = idx
+            break
+
+    # Extraer contenido
+    contenido_seccion = '\n'.join(lineas[inicio_idx:fin_idx])
+
+    # Formatear en markdown
+    contenido_markdown = f"# {titulo_pagina}\n\n{contenido_seccion.strip()}"
+
+    return contenido_markdown
+
+def generar_resumen_documento(contenido_documento, filename):
+    """
+    Genera un resumen ejecutivo del documento usando Frida
+    """
+    prompt_resumen = f"""Genera un resumen ejecutivo del siguiente documento funcional.
+
+**Documento:** {filename}
+
+**Contenido:**
+{contenido_documento[:10000]}
+
+**Tu tarea:**
+Crea un resumen ejecutivo de 300-500 palabras que incluya:
+1. Objetivo principal del documento
+2. Alcance del proyecto/sistema
+3. Puntos clave y características principales
+4. Enlaces a secciones detalladas
+
+**Formato:** Markdown, profesional y claro.
+**Importante:** Solo el contenido markdown, sin explicaciones adicionales."""
+
+    payload = {
+        "model": st.session_state.model,
+        "messages": [
+            {"role": "system", "content": "Eres un experto en resumir documentación técnica."},
+            {"role": "user", "content": prompt_resumen}
+        ],
+        "temperature": 0.5
+    }
+
+    try:
+        respuesta = call_ia(payload)
+        return f"# Resumen General\n\n{respuesta.strip()}"
+    except:
+        return f"# Resumen General\n\n**Documento:** {filename}\n\n[Resumen pendiente de generar]"
+
+def generar_glosario_documento(contenido_documento):
+    """
+    Genera un glosario de términos técnicos del documento usando Frida
+    """
+    prompt_glosario = f"""Identifica los términos técnicos, acrónimos y conceptos clave del siguiente documento y crea un glosario.
+
+**Contenido:**
+{contenido_documento[:8000]}
+
+**Tu tarea:**
+Crea un glosario en formato markdown con:
+- Términos técnicos y acrónimos encontrados
+- Definición clara de cada uno
+- Orden alfabético
+
+**Formato:** Markdown con lista de términos.
+**Importante:** Solo el contenido markdown, sin explicaciones adicionales."""
+
+    payload = {
+        "model": st.session_state.model,
+        "messages": [
+            {"role": "system", "content": "Eres un experto en documentación técnica."},
+            {"role": "user", "content": prompt_glosario}
+        ],
+        "temperature": 0.3
+    }
+
+    try:
+        respuesta = call_ia(payload)
+        return f"# Glosario\n\n{respuesta.strip()}"
+    except:
+        return "# Glosario\n\n[Glosario pendiente de generar]"
+
 def analizar_documento_con_frida(contenido_documento, filename):
     """
     Usa Frida para analizar el documento y proponer una estructura de wiki
     Retorna una estructura jerárquica de páginas sugeridas
     """
-    prompt_analisis = f"""Analiza el siguiente documento funcional y propón una estructura jerárquica de páginas Wiki para Azure DevOps.
+    prompt_analisis = f"""Analiza el siguiente documento funcional y propón una estructura jerárquica de páginas Wiki.
 
 **Documento:** {filename}
 
 **Contenido del documento:**
-{contenido_documento[:15000]}
-{"[Documento truncado por longitud...]" if len(contenido_documento) > 15000 else ""}
+{contenido_documento[:20000]}
+{"[Documento truncado para análisis, pero el contenido COMPLETO se usará en la wiki...]" if len(contenido_documento) > 20000 else ""}
+
+**IMPORTANTE:**
+- El contenido COMPLETO del documento se incluirá en las páginas
+- NO resumas ni omitas nada
+- Solo propón la ESTRUCTURA (títulos y organización)
 
 **Tu tarea:**
-1. Identifica las secciones principales del documento
-2. Propón una estructura jerárquica de páginas Wiki organizada y clara
-3. Para cada página, propón:
-   - Título de la página
-   - Resumen/contenido mejorado (en markdown)
-   - Si es página raíz o subpágina (indicar padre)
+Propón una estructura jerárquica indicando para cada página:
+1. Título de la página
+2. Encabezados del documento original que corresponden a esta sección
+3. Tipo de página: "resumen", "contenido_completo", o "glosario"
 
-**Estructura esperada:**
-- Una página principal/índice que sirva de resumen general
-- Páginas de secciones principales (máximo 5-7 páginas principales)
-- Subpáginas para detalles específicos (cuando sea necesario)
-- Páginas auxiliares (glosario, FAQs, referencias) si aplica
+**Páginas especiales:**
+- Página "Resumen General" (resumen ejecutivo corto)
+- Página "Glosario" (solo si hay términos técnicos)
+
+**Resto de páginas:**
+- Deben contener el contenido COMPLETO de cada sección del documento
+- Divide en secciones lógicas según los encabezados del documento
 
 **Formato de respuesta (JSON):**
-IMPORTANTE: Genera JSON VÁLIDO. Todos los saltos de línea deben ser \\n (escapados).
 
 ```json
 {{
   "paginas": [
     {{
-      "titulo": "Índice y Resumen General",
+      "titulo": "Resumen General",
       "es_raiz": true,
       "padre": null,
-      "contenido_markdown": "# Resumen del Proyecto\\n\\nEste documento describe...\\n\\n## Contenido\\n- Item 1\\n- Item 2",
+      "tipo": "resumen",
+      "seccion_origen": "",
       "orden": 0
     }},
     {{
       "titulo": "Introducción",
       "es_raiz": false,
-      "padre": "Índice y Resumen General",
-      "contenido_markdown": "## Introducción\\n\\nObjetivos del proyecto son:\\n\\n- Objetivo 1\\n- Objetivo 2",
+      "padre": "Resumen General",
+      "tipo": "contenido_completo",
+      "seccion_origen": "1. Introducción|INTRODUCCIÓN|Introducción",
       "orden": 1
+    }},
+    {{
+      "titulo": "Glosario",
+      "es_raiz": false,
+      "padre": "Resumen General",
+      "tipo": "glosario",
+      "seccion_origen": "",
+      "orden": 99
     }}
   ]
 }}
 ```
 
-**CRÍTICO - Reglas de JSON:**
-1. El contenido_markdown debe ser una sola línea
-2. Usa \\n para saltos de línea (NO saltos de línea reales)
-3. Escapa comillas dobles dentro del contenido como \\"
-4. NO uses comillas simples, solo dobles
-5. Limita el contenido de cada página a máximo 500 caracteres
-6. Si el contenido es largo, divídelo en más páginas
+**Campos:**
+- `tipo`: "resumen", "contenido_completo", o "glosario"
+- `seccion_origen`: Encabezados del documento que corresponden (separados por |)
 
-**Otras reglas:**
-- Máximo 15 páginas total
-- Usa markdown para el contenido
-- Mejora la redacción y claridad
-- Organiza lógicamente"""
+**Reglas:**
+- Máximo 12 páginas de contenido + resumen + glosario
+- Jerarquía de máximo 2 niveles
+- Sigue el orden lógico del documento"""
 
     payload = {
         "model": st.session_state.model,
         "messages": [
             {
                 "role": "system",
-                "content": "Eres un experto en documentación técnica y estructuración de contenido. Especializas en crear wikis bien organizadas y fáciles de navegar."
+                "content": "Eres un experto en estructuración de documentación. Tu trabajo es proponer la ESTRUCTURA, no generar contenido."
             },
             {
                 "role": "user",
@@ -940,7 +1067,7 @@ IMPORTANTE: Genera JSON VÁLIDO. Todos los saltos de línea deben ser \\n (escap
     }
 
     try:
-        with st.spinner("🧠 Frida está analizando el documento y proponiendo estructura..."):
+        with st.spinner("🧠 Paso 1/2: Frida está analizando la estructura del documento..."):
             respuesta = call_ia(payload)
 
         # Extraer JSON de la respuesta
@@ -948,18 +1075,38 @@ IMPORTANTE: Genera JSON VÁLIDO. Todos los saltos de línea deben ser \\n (escap
         if json_match:
             json_str = json_match.group(1)
             estructura = json.loads(json_str)
-            return estructura
         else:
-            # Intentar parsear directamente
             estructura = json.loads(respuesta)
-            return estructura
+
+        # Paso 2: Generar contenido completo para cada página
+        total_paginas = len(estructura['paginas'])
+        with st.spinner(f"📝 Paso 2/2: Extrayendo contenido completo ({total_paginas} páginas)..."):
+            for idx, pagina in enumerate(estructura['paginas']):
+                progress_msg = f"  [{idx+1}/{total_paginas}] {pagina['titulo']}"
+                st.caption(progress_msg)
+
+                if pagina['tipo'] == 'resumen':
+                    pagina['contenido_markdown'] = generar_resumen_documento(contenido_documento, filename)
+                elif pagina['tipo'] == 'glosario':
+                    pagina['contenido_markdown'] = generar_glosario_documento(contenido_documento)
+                else:  # contenido_completo
+                    pagina['contenido_markdown'] = extraer_contenido_seccion(
+                        contenido_documento,
+                        pagina.get('seccion_origen', ''),
+                        pagina['titulo']
+                    )
+
+        st.success(f"✅ Estructura generada con {total_paginas} páginas (contenido completo incluido)")
+        return estructura
 
     except json.JSONDecodeError as e:
         st.error(f"Error al parsear respuesta de Frida: {str(e)}")
-        st.code(respuesta[:500])
+        st.code(respuesta[:1000])
         return None
     except Exception as e:
         st.error(f"Error al analizar documento: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 def mejorar_contenido_pagina_con_frida(titulo_pagina, contenido_original, contexto_documento=""):
