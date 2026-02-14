@@ -1,0 +1,44 @@
+name: 🎫 Tilena → Azure DevOps Sync
+
+on:
+  # Ejecutar cada 30 minutos
+  schedule:
+    - cron: '*/30 * * * *'
+
+  # Permitir ejecución manual desde GitHub
+  workflow_dispatch:
+
+jobs:
+  sync-tilena-emails:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install requests imapclient
+
+      - name: 🔄 Sync Tilena emails to Azure DevOps
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          DEVOPS_ORG: ${{ secrets.DEVOPS_ORG }}
+          DEVOPS_PROJECT: ${{ secrets.DEVOPS_PROJECT }}
+          DEVOPS_PAT: ${{ secrets.DEVOPS_PAT }}
+        run: python scripts/tilena_sync.py
+
+      - name: 📊 Upload logs (if available)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilena-sync-logs
+          path: logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
