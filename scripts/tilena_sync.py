@@ -274,11 +274,80 @@ def create_devops_workitem(title, description, ticket_url, ticket_id):
         return None
 
 
+def process_powerautomate_email():
+    """
+    Procesa un email enviado desde Power Automate vía inputs del workflow
+
+    Lee las variables de entorno:
+    - EMAIL_SUBJECT: Asunto del email
+    - EMAIL_BODY: Cuerpo del email
+    - EMAIL_FROM: Remitente
+    - EMAIL_DATE: Fecha del email
+    """
+    log("📥 Modo: Power Automate (webhook)")
+    log("-" * 60)
+
+    # Obtener datos del email desde variables de entorno
+    subject = os.getenv('EMAIL_SUBJECT', '')
+    body = os.getenv('EMAIL_BODY', '')
+    email_from = os.getenv('EMAIL_FROM', '')
+    email_date = os.getenv('EMAIL_DATE', '')
+
+    if not subject and not body:
+        log("❌ ERROR: No se recibieron datos del email desde Power Automate", "ERROR")
+        log("   Verifica que EMAIL_SUBJECT y EMAIL_BODY estén configurados", "ERROR")
+        sys.exit(1)
+
+    log(f"📧 Email recibido desde Power Automate")
+    log(f"   De: {email_from}")
+    log(f"   Fecha: {email_date}")
+    log(f"   Asunto: {subject[:60]}...")
+    log("-" * 60)
+
+    # Extraer info del ticket
+    ticket_info = extract_ticket_info(body, subject)
+
+    log(f"🎫 Ticket ID: {ticket_info['id']}")
+    log(f"🔗 URL: {ticket_info['url']}")
+
+    # Crear título para Azure DevOps
+    title = f"[Tilena #{ticket_info['id']}] {ticket_info['title']}"
+
+    # Crear Work Item
+    work_item_id = create_devops_workitem(
+        title=title,
+        description=body,
+        ticket_url=ticket_info['url'],
+        ticket_id=ticket_info['id']
+    )
+
+    if work_item_id:
+        log(f"✅ Work Item #{work_item_id} creado exitosamente", "SUCCESS")
+        log("=" * 60)
+        return True
+    else:
+        log(f"❌ No se pudo crear el Work Item", "ERROR")
+        log("=" * 60)
+        sys.exit(1)
+
+
 def main():
     """Función principal"""
     log("=" * 60)
     log("🚀 Iniciando sincronización Tilena → Azure DevOps")
     log("=" * 60)
+
+    # Detectar modo de ejecución
+    trigger_mode = os.getenv('TRIGGER_MODE', 'imap').lower()
+
+    if trigger_mode == 'powerautomate':
+        # Modo Power Automate: procesar email desde inputs
+        process_powerautomate_email()
+        return
+
+    # Modo IMAP: conectar al buzón y buscar emails
+    log("📥 Modo: IMAP (búsqueda automática)")
+    log("-" * 60)
 
     # Conectar al buzón
     mail = connect_email()

@@ -1,12 +1,37 @@
 name: 🎫 Tilena → Azure DevOps Sync
 
 on:
-  # Ejecutar cada 30 minutos
+  # Ejecutar cada 30 minutos (modo IMAP)
   schedule:
     - cron: '*/30 * * * *'
 
-  # Permitir ejecución manual desde GitHub
+  # Permitir ejecución desde Power Automate o manual
   workflow_dispatch:
+    inputs:
+      trigger_mode:
+        description: 'Modo: powerautomate o imap'
+        required: false
+        default: 'imap'
+        type: choice
+        options:
+          - powerautomate
+          - imap
+      email_subject:
+        description: 'Asunto del email (solo Power Automate)'
+        required: false
+        type: string
+      email_body:
+        description: 'Cuerpo del email (solo Power Automate)'
+        required: false
+        type: string
+      email_from:
+        description: 'Remitente del email (solo Power Automate)'
+        required: false
+        type: string
+      email_date:
+        description: 'Fecha del email (solo Power Automate)'
+        required: false
+        type: string
 
 jobs:
   sync-tilena-emails:
@@ -27,11 +52,19 @@ jobs:
 
       - name: 🔄 Sync Tilena emails to Azure DevOps
         env:
+          # Credenciales de email (solo para modo IMAP)
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          # Credenciales de Azure DevOps
           DEVOPS_ORG: ${{ secrets.DEVOPS_ORG }}
           DEVOPS_PROJECT: ${{ secrets.DEVOPS_PROJECT }}
           DEVOPS_PAT: ${{ secrets.DEVOPS_PAT }}
+          # Inputs desde Power Automate
+          TRIGGER_MODE: ${{ inputs.trigger_mode || 'imap' }}
+          EMAIL_SUBJECT: ${{ inputs.email_subject }}
+          EMAIL_BODY: ${{ inputs.email_body }}
+          EMAIL_FROM: ${{ inputs.email_from }}
+          EMAIL_DATE: ${{ inputs.email_date }}
         run: python scripts/tilena_sync.py
 
       - name: 📊 Upload logs (if available)
