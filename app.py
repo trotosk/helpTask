@@ -1416,6 +1416,46 @@ template_type = st.sidebar.selectbox(
 )
 prompt_template = st.sidebar.text_area("Contenido del template", get_template(template_type), height=220)
 
+# Configuración de Azure DevOps (global)
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔗 Azure DevOps")
+
+with st.sidebar.expander("Configurar conexión", expanded=False):
+    org_input = st.text_input(
+        "Organización",
+        value=st.session_state.devops_org if st.session_state.devops_org else "TelepizzaIT",
+        placeholder="ej: TelepizzaIT",
+        key="sidebar_org_input"
+    )
+    project_input = st.text_input(
+        "Proyecto",
+        value=st.session_state.devops_project if st.session_state.devops_project else "Sales",
+        placeholder="ej: Sales",
+        key="sidebar_project_input"
+    )
+    pat_input = st.text_input(
+        "PAT",
+        value=st.session_state.devops_pat,
+        type="password",
+        help="Personal Access Token",
+        key="sidebar_pat_input"
+    )
+
+    if st.button("💾 Guardar", use_container_width=True, key="sidebar_save_devops"):
+        if org_input and project_input and pat_input:
+            st.session_state.devops_org = org_input
+            st.session_state.devops_project = project_input
+            st.session_state.devops_pat = pat_input
+            st.success("✅ Guardado")
+            st.rerun()
+        else:
+            st.error("❌ Completa todos los campos")
+
+if st.session_state.devops_org and st.session_state.devops_project and st.session_state.devops_pat:
+    st.sidebar.success(f"✅ Conectado: {st.session_state.devops_org}/{st.session_state.devops_project}")
+else:
+    st.sidebar.info("ℹ️ Configura Azure DevOps para usar todas las funcionalidades")
+
 # ==================================================
 # TABS
 # ==================================================
@@ -1449,67 +1489,16 @@ with tab_devops:
     st.title("🎯 Azure DevOps")
     st.markdown("Consulta work items y documentación Wiki de Azure DevOps usando IA")
 
-    # Configuración de Azure DevOps (compartida entre subtabs)
-    with st.expander("⚙️ Configuración Azure DevOps", expanded=(not st.session_state.devops_org)):
-        st.markdown("#### 🔗 Conexión a Azure DevOps")
+    # Verificar conexión
+    if not st.session_state.devops_org or not st.session_state.devops_project or not st.session_state.devops_pat:
+        st.info("ℹ️ **Configura Azure DevOps en el sidebar** (⚙️ Configuración → 🔗 Azure DevOps)")
+        st.markdown("""
+        **Permisos necesarios del PAT:**
+        - Work Items (Read)
+        - Wiki (Read) o Code (Read)
 
-        col_conn1, col_conn2 = st.columns([2, 1])
-
-        with col_conn1:
-            org_input = st.text_input(
-                "Organización",
-                value=st.session_state.devops_org if st.session_state.devops_org else "TelepizzaIT",
-                placeholder="ej: TelepizzaIT",
-                key="org_input_shared"
-            )
-            project_input = st.text_input(
-                "Proyecto",
-                value=st.session_state.devops_project if st.session_state.devops_project else "Sales",
-                placeholder="ej: Sales",
-                key="project_input_shared"
-            )
-            pat_input = st.text_input(
-                "Personal Access Token (PAT)",
-                value=st.session_state.devops_pat,
-                type="password",
-                help="PAT con permisos: Work Items (Read) + Wiki (Read) o Code (Read)",
-                key="pat_input_shared"
-            )
-
-        with col_conn2:
-            st.markdown("#### ")
-            st.markdown("#### ")
-            if st.button("💾 Guardar Conexión", use_container_width=True, type="primary"):
-                if not org_input or not project_input or not pat_input:
-                    st.error("❌ Completa todos los campos")
-                else:
-                    st.session_state.devops_org = org_input
-                    st.session_state.devops_project = project_input
-                    st.session_state.devops_pat = pat_input
-                    st.success("✅ Conexión guardada")
-                    st.rerun()
-
-            if st.session_state.devops_org and st.session_state.devops_project:
-                st.success("✅ Conectado")
-                st.info(f"**Org:** {st.session_state.devops_org}")
-                st.info(f"**Proyecto:** {st.session_state.devops_project}")
-
-        # Información sobre permisos necesarios
-        with st.expander("ℹ️ Permisos necesarios del PAT"):
-            st.markdown("""
-            **Para Work Items:**
-            - ✅ Work Items (Read)
-
-            **Para Wiki:**
-            - ✅ Wiki (Read)
-            - O alternativamente: Code (Read)
-
-            **Cómo crear/editar un PAT:**
-            1. Azure DevOps → User Settings (arriba derecha) → Personal Access Tokens
-            2. New Token o edita uno existente
-            3. Selecciona los scopes necesarios
-            4. Copia el token y pégalo arriba
-            """)
+        [¿Cómo crear un PAT?](https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate)
+        """)
 
     st.markdown("---")
 
