@@ -48,8 +48,20 @@ def connect_email():
 
         log(f"Conectando a buzón: {email_user}")
 
+        # Detectar servidor IMAP según el dominio del email
+        if 'gmail.com' in email_user.lower():
+            imap_server = 'imap.gmail.com'
+            log("Servidor detectado: Gmail")
+        elif 'outlook.com' in email_user.lower() or 'hotmail.com' in email_user.lower():
+            imap_server = 'outlook.office365.com'
+            log("Servidor detectado: Outlook.com")
+        else:
+            # Por defecto asume Office 365 corporativo
+            imap_server = 'outlook.office365.com'
+            log("Servidor detectado: Office 365 (corporativo)")
+
         # Conectar usando IMAP SSL
-        mail = imaplib.IMAP4_SSL('outlook.office365.com', 993)
+        mail = imaplib.IMAP4_SSL(imap_server, 993)
         mail.login(email_user, email_pass)
 
         log("✅ Conexión exitosa al buzón", "SUCCESS")
