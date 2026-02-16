@@ -1514,215 +1514,214 @@ with tab_devops:
         # Verificar conexión
         if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
             st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
-            st.stop()
-
-        # Configuración de sincronización
-        with st.expander("🎛️ Filtros y Sincronización de Work Items", expanded=not st.session_state.devops_indexed):
-            col_filtros1, col_filtros2 = st.columns(2)
-
-            with col_filtros1:
-                work_item_types = st.multiselect(
-                    "Tipos de Work Items",
-                    options=["Bug", "User Story", "Task", "Feature", "Epic", "Issue", "Test Case"],
-                    default=["Bug"],
-                    help="Selecciona uno o más tipos"
-                )
-
-                area_path_input = st.text_input(
-                    "Área (opcional)",
-                    value="",
-                    placeholder="ej: Sales\\MySaga POC",
-                    help="Deja vacío para todas las áreas"
-                )
-
-            with col_filtros2:
-                max_items = st.slider(
-                    "Límite de items a traer",
-                    min_value=50,
-                    max_value=1000,
-                    value=200,
-                    step=50,
-                    help="Máximo de work items a sincronizar"
-                )
-
-                top_k_similar = st.slider(
-                    "Items similares a mostrar",
-                    min_value=3,
-                    max_value=10,
-                    value=5,
-                    step=1,
-                    help="Número de items similares para enviar a Frida"
-                )
-
-            st.markdown("---")
-
-            col_btn1, col_btn2 = st.columns([3, 1])
-            with col_btn1:
-                if st.button("🔄 Sincronizar e Indexar Work Items", use_container_width=True):
-                    if not work_item_types or len(work_item_types) == 0:
-                        st.error("❌ Selecciona al menos un tipo de work item")
-                    else:
-                        with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
-                            incidencias = obtener_incidencias_devops(
-                                st.session_state.devops_org,
-                                st.session_state.devops_project,
-                                st.session_state.devops_pat,
-                                area_path=area_path_input if area_path_input else None,
-                                work_item_types=work_item_types,
-                                max_items=max_items
-                            )
-
-                        if incidencias:
-                            st.success(f"✅ Se encontraron {len(incidencias)} work items")
-
-                            tipos_count = {}
-                            for inc in incidencias:
-                                tipo = inc['tipo']
-                                tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
-
-                            st.info(f"📊 Distribución: " + ", ".join([f"{t}: {c}" for t, c in tipos_count.items()]))
-
-                            st.session_state.devops_incidencias = incidencias
-
-                            if st.session_state.embedding_model is None:
-                                st.session_state.embedding_model = cargar_modelo_embeddings()
-
-                            embeddings = generar_embeddings_incidencias(
-                                incidencias,
-                                st.session_state.embedding_model
-                            )
-                            st.session_state.devops_embeddings = embeddings
-                            st.session_state.devops_indexed = True
-                            st.session_state.devops_top_k = top_k_similar
-
-                            st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
-                            st.rerun()
+        else:
+            # Configuración de sincronización
+            with st.expander("🎛️ Filtros y Sincronización de Work Items", expanded=not st.session_state.devops_indexed):
+                col_filtros1, col_filtros2 = st.columns(2)
+    
+                with col_filtros1:
+                    work_item_types = st.multiselect(
+                        "Tipos de Work Items",
+                        options=["Bug", "User Story", "Task", "Feature", "Epic", "Issue", "Test Case"],
+                        default=["Bug"],
+                        help="Selecciona uno o más tipos"
+                    )
+    
+                    area_path_input = st.text_input(
+                        "Área (opcional)",
+                        value="",
+                        placeholder="ej: Sales\\MySaga POC",
+                        help="Deja vacío para todas las áreas"
+                    )
+    
+                with col_filtros2:
+                    max_items = st.slider(
+                        "Límite de items a traer",
+                        min_value=50,
+                        max_value=1000,
+                        value=200,
+                        step=50,
+                        help="Máximo de work items a sincronizar"
+                    )
+    
+                    top_k_similar = st.slider(
+                        "Items similares a mostrar",
+                        min_value=3,
+                        max_value=10,
+                        value=5,
+                        step=1,
+                        help="Número de items similares para enviar a Frida"
+                    )
+    
+                st.markdown("---")
+    
+                col_btn1, col_btn2 = st.columns([3, 1])
+                with col_btn1:
+                    if st.button("🔄 Sincronizar e Indexar Work Items", use_container_width=True):
+                        if not work_item_types or len(work_item_types) == 0:
+                            st.error("❌ Selecciona al menos un tipo de work item")
                         else:
-                            st.warning("⚠️ No se encontraron work items o hubo un error")
-
-            with col_btn2:
-                if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_devops"):
-                    st.session_state.devops_incidencias = []
-                    st.session_state.devops_embeddings = None
-                    st.session_state.devops_indexed = False
-                    st.session_state.devops_messages = []
-                    st.success("✅ Cache limpiado")
-                    st.rerun()
-
-        # Estado de indexación
-        if st.session_state.devops_indexed:
-            tipos_en_cache = {}
-            for inc in st.session_state.devops_incidencias:
-                tipo = inc['tipo']
-                tipos_en_cache[tipo] = tipos_en_cache.get(tipo, 0) + 1
-
-            tipos_str = ", ".join([f"{t} ({c})" for t, c in tipos_en_cache.items()])
-            st.info(f"📊 **{len(st.session_state.devops_incidencias)} work items indexados**: {tipos_str}")
-            st.info(f"🎯 **Top-K configurado**: {st.session_state.get('devops_top_k', 5)} items similares por consulta")
-
-        # Chat de consultas
-        st.markdown("---")
-
-        col_chat, col_stats = st.columns([2, 1])
-
-        with col_stats:
-            st.subheader("📈 Estadísticas")
-            if st.session_state.devops_incidencias:
-                st.markdown("**Por tipo:**")
-                tipos = {}
+                            with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
+                                incidencias = obtener_incidencias_devops(
+                                    st.session_state.devops_org,
+                                    st.session_state.devops_project,
+                                    st.session_state.devops_pat,
+                                    area_path=area_path_input if area_path_input else None,
+                                    work_item_types=work_item_types,
+                                    max_items=max_items
+                                )
+    
+                            if incidencias:
+                                st.success(f"✅ Se encontraron {len(incidencias)} work items")
+    
+                                tipos_count = {}
+                                for inc in incidencias:
+                                    tipo = inc['tipo']
+                                    tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
+    
+                                st.info(f"📊 Distribución: " + ", ".join([f"{t}: {c}" for t, c in tipos_count.items()]))
+    
+                                st.session_state.devops_incidencias = incidencias
+    
+                                if st.session_state.embedding_model is None:
+                                    st.session_state.embedding_model = cargar_modelo_embeddings()
+    
+                                embeddings = generar_embeddings_incidencias(
+                                    incidencias,
+                                    st.session_state.embedding_model
+                                )
+                                st.session_state.devops_embeddings = embeddings
+                                st.session_state.devops_indexed = True
+                                st.session_state.devops_top_k = top_k_similar
+    
+                                st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
+                                st.rerun()
+                            else:
+                                st.warning("⚠️ No se encontraron work items o hubo un error")
+    
+                with col_btn2:
+                    if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_devops"):
+                        st.session_state.devops_incidencias = []
+                        st.session_state.devops_embeddings = None
+                        st.session_state.devops_indexed = False
+                        st.session_state.devops_messages = []
+                        st.success("✅ Cache limpiado")
+                        st.rerun()
+    
+            # Estado de indexación
+            if st.session_state.devops_indexed:
+                tipos_en_cache = {}
                 for inc in st.session_state.devops_incidencias:
                     tipo = inc['tipo']
-                    tipos[tipo] = tipos.get(tipo, 0) + 1
-                for tipo, count in sorted(tipos.items()):
-                    st.metric(tipo, count)
-
-                st.markdown("---")
-
-                st.markdown("**Por estado:**")
-                estados = {}
-                for inc in st.session_state.devops_incidencias:
-                    estado = inc['estado']
-                    estados[estado] = estados.get(estado, 0) + 1
-                for estado, count in sorted(estados.items(), key=lambda x: x[1], reverse=True)[:5]:
-                    st.text(f"{estado}: {count}")
-            else:
-                st.info("Sincroniza primero los work items")
-
-        with col_chat:
-            st.subheader("💬 Chat de consultas")
-
-            for m in st.session_state.devops_messages:
-                with st.chat_message(m["role"]):
-                    st.markdown(m["content"])
-
-            if devops_query := st.chat_input(
-                "Pregunta sobre work items... ej: '¿Cómo se implementó X?'",
-                key="devops_chat",
-                disabled=not st.session_state.devops_indexed
-            ):
-                if not st.session_state.devops_indexed:
-                    st.warning("⚠️ Primero debes sincronizar e indexar los work items")
+                    tipos_en_cache[tipo] = tipos_en_cache.get(tipo, 0) + 1
+    
+                tipos_str = ", ".join([f"{t} ({c})" for t, c in tipos_en_cache.items()])
+                st.info(f"📊 **{len(st.session_state.devops_incidencias)} work items indexados**: {tipos_str}")
+                st.info(f"🎯 **Top-K configurado**: {st.session_state.get('devops_top_k', 5)} items similares por consulta")
+    
+            # Chat de consultas
+            st.markdown("---")
+    
+            col_chat, col_stats = st.columns([2, 1])
+    
+            with col_stats:
+                st.subheader("📈 Estadísticas")
+                if st.session_state.devops_incidencias:
+                    st.markdown("**Por tipo:**")
+                    tipos = {}
+                    for inc in st.session_state.devops_incidencias:
+                        tipo = inc['tipo']
+                        tipos[tipo] = tipos.get(tipo, 0) + 1
+                    for tipo, count in sorted(tipos.items()):
+                        st.metric(tipo, count)
+    
+                    st.markdown("---")
+    
+                    st.markdown("**Por estado:**")
+                    estados = {}
+                    for inc in st.session_state.devops_incidencias:
+                        estado = inc['estado']
+                        estados[estado] = estados.get(estado, 0) + 1
+                    for estado, count in sorted(estados.items(), key=lambda x: x[1], reverse=True)[:5]:
+                        st.text(f"{estado}: {count}")
                 else:
-                    st.session_state.devops_messages.append({"role": "user", "content": devops_query})
-
-                    top_k = st.session_state.get('devops_top_k', 5)
-
-                    with st.spinner(f"🔍 Buscando los {top_k} work items más similares..."):
-                        resultados = buscar_incidencias_similares(
-                            devops_query,
-                            st.session_state.devops_incidencias,
-                            st.session_state.devops_embeddings,
-                            st.session_state.embedding_model,
-                            top_k=top_k
-                        )
-
-                    contexto = construir_contexto_devops(resultados)
-
-                    system_prompt = """Eres un asistente técnico experto en analizar work items de software.
-
-Cuando respondas:
-1. Analiza los work items similares (pueden ser Bugs, User Stories, Tasks, etc.)
-2. Si hay coincidencia exacta o similar, explica cómo se resolvió o implementó
-3. Si no hay coincidencia exacta, propón soluciones basadas en casos similares
-4. Sé específico y técnico
-5. Menciona el ID y tipo de los work items relevantes
-6. Si encuentras patrones comunes, menciónalo"""
-
-                    payload = {
-                        "model": st.session_state.model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": f"{contexto}\n\n**Consulta:** {devops_query}"}
-                        ]
-                    }
-
-                    if st.session_state.include_temp:
-                        payload["temperature"] = st.session_state.temperature
-                    if st.session_state.include_tokens:
-                        payload["max_tokens"] = st.session_state.max_tokens
-
-                    with st.spinner("🤖 Frida está analizando los work items..."):
-                        respuesta = call_ia(payload)
-
-                    st.session_state.devops_messages.append({"role": "assistant", "content": respuesta})
-
-                    with st.expander(f"📋 Ver los {top_k} work items más similares"):
-                        for i, resultado in enumerate(resultados, 1):
-                            inc = resultado["incidencia"]
-                            sim = resultado["similitud"]
-
-                            st.markdown(f"### Work Item {i} - [{inc['tipo']}] ID: {inc['id']} (Similitud: {sim:.1%})")
-                            st.markdown(f"**Título:** {inc['titulo']}")
-                            st.markdown(f"**Estado:** {inc['estado']}")
-                            st.markdown(f"**Área:** {inc['area']}")
-                            if inc['resolucion']:
-                                st.markdown(f"**Resolución:** {inc['resolucion']}")
-                            st.markdown(f"**Descripción:** {limpiar_html(inc['descripcion'])[:300]}...")
-                            if inc['tags']:
-                                st.markdown(f"**Tags:** {inc['tags']}")
-                            st.markdown("---")
-
-                    st.rerun()
+                    st.info("Sincroniza primero los work items")
+    
+            with col_chat:
+                st.subheader("💬 Chat de consultas")
+    
+                for m in st.session_state.devops_messages:
+                    with st.chat_message(m["role"]):
+                        st.markdown(m["content"])
+    
+                if devops_query := st.chat_input(
+                    "Pregunta sobre work items... ej: '¿Cómo se implementó X?'",
+                    key="devops_chat",
+                    disabled=not st.session_state.devops_indexed
+                ):
+                    if not st.session_state.devops_indexed:
+                        st.warning("⚠️ Primero debes sincronizar e indexar los work items")
+                    else:
+                        st.session_state.devops_messages.append({"role": "user", "content": devops_query})
+    
+                        top_k = st.session_state.get('devops_top_k', 5)
+    
+                        with st.spinner(f"🔍 Buscando los {top_k} work items más similares..."):
+                            resultados = buscar_incidencias_similares(
+                                devops_query,
+                                st.session_state.devops_incidencias,
+                                st.session_state.devops_embeddings,
+                                st.session_state.embedding_model,
+                                top_k=top_k
+                            )
+    
+                        contexto = construir_contexto_devops(resultados)
+    
+                        system_prompt = """Eres un asistente técnico experto en analizar work items de software.
+    
+    Cuando respondas:
+    1. Analiza los work items similares (pueden ser Bugs, User Stories, Tasks, etc.)
+    2. Si hay coincidencia exacta o similar, explica cómo se resolvió o implementó
+    3. Si no hay coincidencia exacta, propón soluciones basadas en casos similares
+    4. Sé específico y técnico
+    5. Menciona el ID y tipo de los work items relevantes
+    6. Si encuentras patrones comunes, menciónalo"""
+    
+                        payload = {
+                            "model": st.session_state.model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": f"{contexto}\n\n**Consulta:** {devops_query}"}
+                            ]
+                        }
+    
+                        if st.session_state.include_temp:
+                            payload["temperature"] = st.session_state.temperature
+                        if st.session_state.include_tokens:
+                            payload["max_tokens"] = st.session_state.max_tokens
+    
+                        with st.spinner("🤖 Frida está analizando los work items..."):
+                            respuesta = call_ia(payload)
+    
+                        st.session_state.devops_messages.append({"role": "assistant", "content": respuesta})
+    
+                        with st.expander(f"📋 Ver los {top_k} work items más similares"):
+                            for i, resultado in enumerate(resultados, 1):
+                                inc = resultado["incidencia"]
+                                sim = resultado["similitud"]
+    
+                                st.markdown(f"### Work Item {i} - [{inc['tipo']}] ID: {inc['id']} (Similitud: {sim:.1%})")
+                                st.markdown(f"**Título:** {inc['titulo']}")
+                                st.markdown(f"**Estado:** {inc['estado']}")
+                                st.markdown(f"**Área:** {inc['area']}")
+                                if inc['resolucion']:
+                                    st.markdown(f"**Resolución:** {inc['resolucion']}")
+                                st.markdown(f"**Descripción:** {limpiar_html(inc['descripcion'])[:300]}...")
+                                if inc['tags']:
+                                    st.markdown(f"**Tags:** {inc['tags']}")
+                                st.markdown("---")
+    
+                        st.rerun()
 
     # ================= SUBTAB 2: CONSULTA WIKI =================
     with subtab_wiki:
@@ -1732,325 +1731,324 @@ Cuando respondas:
         # Verificar configuración de Azure DevOps
         if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
             st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
-            st.stop()
-
-        # Sección de carga de Wiki
-        with st.expander("📥 Seleccionar Páginas de Wiki", expanded=not st.session_state.wiki_indexed):
-            col1, col2 = st.columns([2, 1])
-
-            with col1:
-                # Listar wikis disponibles
-                if st.button("🔍 Listar Wikis del Proyecto"):
-                    with st.spinner("Obteniendo wikis..."):
-                        wikis = obtener_wikis_proyecto(
-                            st.session_state.devops_org,
-                            st.session_state.devops_project,
-                            st.session_state.devops_pat
-                        )
-
-                    if wikis:
-                        st.session_state.available_wikis = wikis
-                        st.success(f"✅ {len(wikis)} wiki(s) encontrada(s)")
-                    else:
-                        st.error("❌ No se encontraron wikis o hubo un error")
-
-                # Selector de wiki
-                if 'available_wikis' in st.session_state and st.session_state.available_wikis:
-                    selected_wiki_idx = st.selectbox(
-                        "Selecciona una Wiki",
-                        options=range(len(st.session_state.available_wikis)),
-                        format_func=lambda i: f"{st.session_state.available_wikis[i]['name']} ({st.session_state.available_wikis[i]['type']})",
-                        key="wiki_selector"
-                    )
-
-                    selected_wiki = st.session_state.available_wikis[selected_wiki_idx]
-                    st.session_state.selected_wiki_id = selected_wiki['id']
-                    st.session_state.selected_wiki_name = selected_wiki['name']
-
-                    st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
-
-                    # Botón para listar páginas
-                    if st.button("📄 Listar Páginas de esta Wiki"):
-                        # Guardar logs en session_state para mostrar en col2
-                        st.session_state.wiki_logs = []
-
-                        with st.spinner("Obteniendo páginas principales..."):
-                            paginas = obtener_paginas_wiki(
+        else:
+            # Sección de carga de Wiki
+            with st.expander("📥 Seleccionar Páginas de Wiki", expanded=not st.session_state.wiki_indexed):
+                col1, col2 = st.columns([2, 1])
+    
+                with col1:
+                    # Listar wikis disponibles
+                    if st.button("🔍 Listar Wikis del Proyecto"):
+                        with st.spinner("Obteniendo wikis..."):
+                            wikis = obtener_wikis_proyecto(
                                 st.session_state.devops_org,
                                 st.session_state.devops_project,
-                                st.session_state.devops_pat,
-                                st.session_state.selected_wiki_id
+                                st.session_state.devops_pat
                             )
-
-                        if paginas:
-                            # Obtener subpáginas para cada página padre
-                            todas_paginas = []
-                            total_principales = len(paginas)
-                            st.session_state.wiki_logs.append(("info", f"📊 Páginas principales: {total_principales}"))
-
-                            for idx, pagina in enumerate(paginas):
-                                todas_paginas.append(pagina)
-
-                                # Si es página padre, obtener sus subpáginas
-                                if pagina.get('isParentPage', False):
-                                    with st.spinner(f"📁 Obteniendo subpáginas de {pagina['path']} ({idx+1}/{total_principales})..."):
-                                        subpaginas = obtener_subpaginas_especificas(
-                                            st.session_state.devops_org,
-                                            st.session_state.devops_project,
-                                            st.session_state.devops_pat,
-                                            st.session_state.selected_wiki_id,
-                                            pagina['path']
-                                        )
-
-                                        if subpaginas:
-                                            st.session_state.wiki_logs.append(("info", f"  └─ {pagina['path']}: +{len(subpaginas)} subpágina(s)"))
-                                            todas_paginas.extend(subpaginas)
-
-                            st.session_state.available_wiki_pages = todas_paginas
-                            st.session_state.wiki_logs.append(("success", f"✅ Total: {len(todas_paginas)} página(s) ({total_principales} principales + {len(todas_paginas) - total_principales} subpáginas)"))
-                            st.rerun()
+    
+                        if wikis:
+                            st.session_state.available_wikis = wikis
+                            st.success(f"✅ {len(wikis)} wiki(s) encontrada(s)")
                         else:
-                            st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas en esta wiki"))
-                            st.rerun()
-
-                    # Selector de páginas (individual + batch)
-                    if 'available_wiki_pages' in st.session_state and st.session_state.available_wiki_pages:
-                        st.markdown("#### Seleccionar páginas para indexar:")
-
-                        # Opción: Seleccionar todas
-                        select_all = st.checkbox("Seleccionar todas las páginas", value=False)
-
-                        # Lista de checkboxes para páginas
-                        selected_pages = []
-
-                        if select_all:
-                            selected_pages = st.session_state.available_wiki_pages.copy()
-                            st.info(f"📑 Todas las páginas seleccionadas ({len(selected_pages)})")
-                        else:
-                            st.markdown("**Selecciona páginas individualmente:**")
-                            for idx, page in enumerate(st.session_state.available_wiki_pages):
-                                if st.checkbox(
-                                    f"{page['path']}",
-                                    value=False,
-                                    key=f"wiki_page_{idx}"
-                                ):
-                                    selected_pages.append(page)
-
-                        st.session_state.selected_wiki_pages = selected_pages
-
-                        if selected_pages:
-                            st.success(f"✅ {len(selected_pages)} página(s) seleccionada(s)")
-
-            with col2:
-                st.markdown("#### ⚙️ Configuración")
-                wiki_chunk_size = st.slider(
-                    "Tamaño de fragmentos",
-                    min_value=500,
-                    max_value=4000,
-                    value=1000,
-                    step=100,
-                    help="Tamaño de cada fragmento de las páginas Wiki"
-                )
-
-                wiki_top_k = st.slider(
-                    "Fragmentos relevantes",
-                    min_value=3,
-                    max_value=10,
-                    value=5,
-                    step=1,
-                    help="Número de fragmentos a usar como contexto"
-                )
-
-                st.markdown("---")
-                st.markdown("#### 📊 Logs y Debug")
-
-                # Mostrar logs guardados
-                if hasattr(st.session_state, 'wiki_logs') and st.session_state.wiki_logs:
-                    for log_type, log_message in st.session_state.wiki_logs:
-                        if log_type == "info":
-                            st.info(log_message)
-                        elif log_type == "success":
-                            st.success(log_message)
-                        elif log_type == "warning":
-                            st.warning(log_message)
-                        elif log_type == "error":
-                            st.error(log_message)
-                else:
-                    st.text("No hay logs disponibles")
-
-            st.markdown("---")
-
-            # Botones de acción
-            col_btn1, col_btn2 = st.columns([3, 1])
-
-            with col_btn1:
-                if st.button("🔄 Procesar e Indexar Páginas", use_container_width=True, key="procesar_wiki_btn"):
-                    if not hasattr(st.session_state, 'selected_wiki_pages') or len(st.session_state.selected_wiki_pages) == 0:
-                        st.error("❌ Debes seleccionar al menos una página de la wiki")
-                    else:
-                        # Procesar cada página seleccionada
-                        paginas_contenido = []
-                        progress_bar = st.progress(0)
-                        total_pages = len(st.session_state.selected_wiki_pages)
-
-                        for idx, page in enumerate(st.session_state.selected_wiki_pages):
-                            progress_bar.progress((idx + 1) / total_pages)
-
-                            with st.spinner(f"Descargando {page['path']}..."):
-                                contenido_page = obtener_contenido_pagina_wiki(
+                            st.error("❌ No se encontraron wikis o hubo un error")
+    
+                    # Selector de wiki
+                    if 'available_wikis' in st.session_state and st.session_state.available_wikis:
+                        selected_wiki_idx = st.selectbox(
+                            "Selecciona una Wiki",
+                            options=range(len(st.session_state.available_wikis)),
+                            format_func=lambda i: f"{st.session_state.available_wikis[i]['name']} ({st.session_state.available_wikis[i]['type']})",
+                            key="wiki_selector"
+                        )
+    
+                        selected_wiki = st.session_state.available_wikis[selected_wiki_idx]
+                        st.session_state.selected_wiki_id = selected_wiki['id']
+                        st.session_state.selected_wiki_name = selected_wiki['name']
+    
+                        st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
+    
+                        # Botón para listar páginas
+                        if st.button("📄 Listar Páginas de esta Wiki"):
+                            # Guardar logs en session_state para mostrar en col2
+                            st.session_state.wiki_logs = []
+    
+                            with st.spinner("Obteniendo páginas principales..."):
+                                paginas = obtener_paginas_wiki(
                                     st.session_state.devops_org,
                                     st.session_state.devops_project,
                                     st.session_state.devops_pat,
-                                    st.session_state.selected_wiki_id,
-                                    page['id']
+                                    st.session_state.selected_wiki_id
                                 )
-
-                            if contenido_page and contenido_page['content']:
-                                # Limpiar markdown
-                                texto_limpio = limpiar_markdown(contenido_page['content'])
-
-                                # Dividir en chunks
-                                chunks = dividir_en_chunks(texto_limpio, chunk_size=wiki_chunk_size)
-
-                                paginas_contenido.append({
-                                    'id': page['id'],
-                                    'path': page['path'],
-                                    'chunks': chunks
-                                })
-
-                        if paginas_contenido:
-                            st.success(f"✅ {len(paginas_contenido)} página(s) procesada(s)")
-
-                            # Cargar modelo si no está cargado
-                            if st.session_state.embedding_model is None:
-                                st.session_state.embedding_model = cargar_modelo_embeddings()
-
-                            # Generar embeddings
-                            embeddings, referencias = generar_embeddings_wiki(
-                                paginas_contenido,
-                                st.session_state.embedding_model
-                            )
-
-                            # Extraer lista plana de chunks para búsqueda
-                            todos_chunks = []
-                            for pagina in paginas_contenido:
-                                todos_chunks.extend(pagina['chunks'])
-
-                            # Guardar en session_state
-                            st.session_state.wiki_paginas_contenido = paginas_contenido
-                            st.session_state.wiki_embeddings = embeddings
-                            st.session_state.wiki_referencias = referencias
-                            st.session_state.wiki_chunks = todos_chunks
-                            st.session_state.wiki_indexed = True
-                            st.session_state.wiki_top_k = wiki_top_k
-
-                            total_chunks = sum(len(p['chunks']) for p in paginas_contenido)
-                            st.success(f"✅ Wiki indexada: {len(paginas_contenido)} páginas, {total_chunks} fragmentos")
-                            st.rerun()
-                        else:
-                            st.error("❌ No se pudo procesar ninguna página")
-
-            with col_btn2:
-                if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_wiki"):
-                    st.session_state.wiki_paginas_contenido = []
-                    st.session_state.wiki_embeddings = None
-                    st.session_state.wiki_referencias = []
-                    st.session_state.wiki_chunks = []
-                    st.session_state.wiki_indexed = False
-                    st.session_state.wiki_messages = []
-                    if 'available_wikis' in st.session_state:
-                        del st.session_state.available_wikis
-                    if 'available_wiki_pages' in st.session_state:
-                        del st.session_state.available_wiki_pages
-                    if 'selected_wiki_pages' in st.session_state:
-                        del st.session_state.selected_wiki_pages
-                    st.success("✅ Wiki limpiada")
-                    st.rerun()
-
-        # Estado de indexación
-        if st.session_state.wiki_indexed:
-            total_chunks = len(st.session_state.wiki_chunks)
-            total_pages = len(st.session_state.wiki_paginas_contenido)
-            st.info(f"📚 **Wiki indexada**: {st.session_state.selected_wiki_name} - {total_pages} páginas, {total_chunks} fragmentos")
-            st.info(f"🎯 **Top-K configurado**: {st.session_state.get('wiki_top_k', 5)} fragmentos por consulta")
-
-        st.markdown("---")
-
-        # Chat de consultas Wiki
-        st.subheader("💬 Consultas sobre la Wiki")
-
-        for m in st.session_state.wiki_messages:
-            with st.chat_message(m["role"]):
-                st.markdown(m["content"])
-
-        if wiki_query := st.chat_input(
-            "Pregunta sobre la Wiki... ej: '¿Cómo configurar X?'",
-            key="wiki_chat",
-            disabled=not st.session_state.wiki_indexed
-        ):
-            if not st.session_state.wiki_indexed:
-                st.warning("⚠️ Primero debes seleccionar e indexar páginas de la Wiki")
-            else:
-                st.session_state.wiki_messages.append({"role": "user", "content": wiki_query})
-
-                top_k = st.session_state.get('wiki_top_k', 5)
-
-                # Buscar chunks relevantes
-                with st.spinner(f"🔍 Buscando fragmentos relevantes en la Wiki..."):
-                    resultados = buscar_chunks_wiki_similares(
-                        wiki_query,
-                        st.session_state.wiki_chunks,
-                        st.session_state.wiki_embeddings,
-                        st.session_state.wiki_referencias,
-                        st.session_state.embedding_model,
-                        top_k=top_k
+    
+                            if paginas:
+                                # Obtener subpáginas para cada página padre
+                                todas_paginas = []
+                                total_principales = len(paginas)
+                                st.session_state.wiki_logs.append(("info", f"📊 Páginas principales: {total_principales}"))
+    
+                                for idx, pagina in enumerate(paginas):
+                                    todas_paginas.append(pagina)
+    
+                                    # Si es página padre, obtener sus subpáginas
+                                    if pagina.get('isParentPage', False):
+                                        with st.spinner(f"📁 Obteniendo subpáginas de {pagina['path']} ({idx+1}/{total_principales})..."):
+                                            subpaginas = obtener_subpaginas_especificas(
+                                                st.session_state.devops_org,
+                                                st.session_state.devops_project,
+                                                st.session_state.devops_pat,
+                                                st.session_state.selected_wiki_id,
+                                                pagina['path']
+                                            )
+    
+                                            if subpaginas:
+                                                st.session_state.wiki_logs.append(("info", f"  └─ {pagina['path']}: +{len(subpaginas)} subpágina(s)"))
+                                                todas_paginas.extend(subpaginas)
+    
+                                st.session_state.available_wiki_pages = todas_paginas
+                                st.session_state.wiki_logs.append(("success", f"✅ Total: {len(todas_paginas)} página(s) ({total_principales} principales + {len(todas_paginas) - total_principales} subpáginas)"))
+                                st.rerun()
+                            else:
+                                st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas en esta wiki"))
+                                st.rerun()
+    
+                        # Selector de páginas (individual + batch)
+                        if 'available_wiki_pages' in st.session_state and st.session_state.available_wiki_pages:
+                            st.markdown("#### Seleccionar páginas para indexar:")
+    
+                            # Opción: Seleccionar todas
+                            select_all = st.checkbox("Seleccionar todas las páginas", value=False)
+    
+                            # Lista de checkboxes para páginas
+                            selected_pages = []
+    
+                            if select_all:
+                                selected_pages = st.session_state.available_wiki_pages.copy()
+                                st.info(f"📑 Todas las páginas seleccionadas ({len(selected_pages)})")
+                            else:
+                                st.markdown("**Selecciona páginas individualmente:**")
+                                for idx, page in enumerate(st.session_state.available_wiki_pages):
+                                    if st.checkbox(
+                                        f"{page['path']}",
+                                        value=False,
+                                        key=f"wiki_page_{idx}"
+                                    ):
+                                        selected_pages.append(page)
+    
+                            st.session_state.selected_wiki_pages = selected_pages
+    
+                            if selected_pages:
+                                st.success(f"✅ {len(selected_pages)} página(s) seleccionada(s)")
+    
+                with col2:
+                    st.markdown("#### ⚙️ Configuración")
+                    wiki_chunk_size = st.slider(
+                        "Tamaño de fragmentos",
+                        min_value=500,
+                        max_value=4000,
+                        value=1000,
+                        step=100,
+                        help="Tamaño de cada fragmento de las páginas Wiki"
                     )
-
-                # Construir contexto
-                contexto = construir_contexto_wiki(resultados)
-
-                # Llamar a Frida
-                system_prompt = """Eres un asistente experto en analizar documentación técnica de wikis.
-
-Cuando respondas:
-1. Basa tu respuesta en la información de los fragmentos de la Wiki proporcionados
-2. Si la información no está en los fragmentos, indícalo claramente
-3. Menciona las páginas específicas de la Wiki cuando sea relevante
-4. Proporciona respuestas claras y estructuradas
-5. Si encuentras procedimientos o pasos, enuméralos claramente"""
-
-                payload = {
-                    "model": st.session_state.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"{contexto}\n\n**Consulta:** {wiki_query}"}
-                    ]
-                }
-
-                if st.session_state.include_temp:
-                    payload["temperature"] = st.session_state.temperature
-                if st.session_state.include_tokens:
-                    payload["max_tokens"] = st.session_state.max_tokens
-
-                with st.spinner("🤖 Frida está analizando la Wiki..."):
-                    respuesta = call_ia(payload)
-
-                st.session_state.wiki_messages.append({"role": "assistant", "content": respuesta})
-
-                # Mostrar fragmentos usados
-                with st.expander(f"📋 Ver fragmentos de Wiki utilizados"):
-                    for i, resultado in enumerate(resultados, 1):
-                        sim = resultado["similitud"]
-                        chunk = resultado["chunk"]
-                        path = resultado["path"]
-
-                        st.markdown(f"### Fragmento {i} - Página: {path}")
-                        st.markdown(f"**Relevancia:** {sim:.1%}")
-                        st.text(chunk[:500] + ("..." if len(chunk) > 500 else ""))
-                        st.markdown("---")
-
-                st.rerun()
-
+    
+                    wiki_top_k = st.slider(
+                        "Fragmentos relevantes",
+                        min_value=3,
+                        max_value=10,
+                        value=5,
+                        step=1,
+                        help="Número de fragmentos a usar como contexto"
+                    )
+    
+                    st.markdown("---")
+                    st.markdown("#### 📊 Logs y Debug")
+    
+                    # Mostrar logs guardados
+                    if hasattr(st.session_state, 'wiki_logs') and st.session_state.wiki_logs:
+                        for log_type, log_message in st.session_state.wiki_logs:
+                            if log_type == "info":
+                                st.info(log_message)
+                            elif log_type == "success":
+                                st.success(log_message)
+                            elif log_type == "warning":
+                                st.warning(log_message)
+                            elif log_type == "error":
+                                st.error(log_message)
+                    else:
+                        st.text("No hay logs disponibles")
+    
+                st.markdown("---")
+    
+                # Botones de acción
+                col_btn1, col_btn2 = st.columns([3, 1])
+    
+                with col_btn1:
+                    if st.button("🔄 Procesar e Indexar Páginas", use_container_width=True, key="procesar_wiki_btn"):
+                        if not hasattr(st.session_state, 'selected_wiki_pages') or len(st.session_state.selected_wiki_pages) == 0:
+                            st.error("❌ Debes seleccionar al menos una página de la wiki")
+                        else:
+                            # Procesar cada página seleccionada
+                            paginas_contenido = []
+                            progress_bar = st.progress(0)
+                            total_pages = len(st.session_state.selected_wiki_pages)
+    
+                            for idx, page in enumerate(st.session_state.selected_wiki_pages):
+                                progress_bar.progress((idx + 1) / total_pages)
+    
+                                with st.spinner(f"Descargando {page['path']}..."):
+                                    contenido_page = obtener_contenido_pagina_wiki(
+                                        st.session_state.devops_org,
+                                        st.session_state.devops_project,
+                                        st.session_state.devops_pat,
+                                        st.session_state.selected_wiki_id,
+                                        page['id']
+                                    )
+    
+                                if contenido_page and contenido_page['content']:
+                                    # Limpiar markdown
+                                    texto_limpio = limpiar_markdown(contenido_page['content'])
+    
+                                    # Dividir en chunks
+                                    chunks = dividir_en_chunks(texto_limpio, chunk_size=wiki_chunk_size)
+    
+                                    paginas_contenido.append({
+                                        'id': page['id'],
+                                        'path': page['path'],
+                                        'chunks': chunks
+                                    })
+    
+                            if paginas_contenido:
+                                st.success(f"✅ {len(paginas_contenido)} página(s) procesada(s)")
+    
+                                # Cargar modelo si no está cargado
+                                if st.session_state.embedding_model is None:
+                                    st.session_state.embedding_model = cargar_modelo_embeddings()
+    
+                                # Generar embeddings
+                                embeddings, referencias = generar_embeddings_wiki(
+                                    paginas_contenido,
+                                    st.session_state.embedding_model
+                                )
+    
+                                # Extraer lista plana de chunks para búsqueda
+                                todos_chunks = []
+                                for pagina in paginas_contenido:
+                                    todos_chunks.extend(pagina['chunks'])
+    
+                                # Guardar en session_state
+                                st.session_state.wiki_paginas_contenido = paginas_contenido
+                                st.session_state.wiki_embeddings = embeddings
+                                st.session_state.wiki_referencias = referencias
+                                st.session_state.wiki_chunks = todos_chunks
+                                st.session_state.wiki_indexed = True
+                                st.session_state.wiki_top_k = wiki_top_k
+    
+                                total_chunks = sum(len(p['chunks']) for p in paginas_contenido)
+                                st.success(f"✅ Wiki indexada: {len(paginas_contenido)} páginas, {total_chunks} fragmentos")
+                                st.rerun()
+                            else:
+                                st.error("❌ No se pudo procesar ninguna página")
+    
+                with col_btn2:
+                    if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_wiki"):
+                        st.session_state.wiki_paginas_contenido = []
+                        st.session_state.wiki_embeddings = None
+                        st.session_state.wiki_referencias = []
+                        st.session_state.wiki_chunks = []
+                        st.session_state.wiki_indexed = False
+                        st.session_state.wiki_messages = []
+                        if 'available_wikis' in st.session_state:
+                            del st.session_state.available_wikis
+                        if 'available_wiki_pages' in st.session_state:
+                            del st.session_state.available_wiki_pages
+                        if 'selected_wiki_pages' in st.session_state:
+                            del st.session_state.selected_wiki_pages
+                        st.success("✅ Wiki limpiada")
+                        st.rerun()
+    
+            # Estado de indexación
+            if st.session_state.wiki_indexed:
+                total_chunks = len(st.session_state.wiki_chunks)
+                total_pages = len(st.session_state.wiki_paginas_contenido)
+                st.info(f"📚 **Wiki indexada**: {st.session_state.selected_wiki_name} - {total_pages} páginas, {total_chunks} fragmentos")
+                st.info(f"🎯 **Top-K configurado**: {st.session_state.get('wiki_top_k', 5)} fragmentos por consulta")
+    
+            st.markdown("---")
+    
+            # Chat de consultas Wiki
+            st.subheader("💬 Consultas sobre la Wiki")
+    
+            for m in st.session_state.wiki_messages:
+                with st.chat_message(m["role"]):
+                    st.markdown(m["content"])
+    
+            if wiki_query := st.chat_input(
+                "Pregunta sobre la Wiki... ej: '¿Cómo configurar X?'",
+                key="wiki_chat",
+                disabled=not st.session_state.wiki_indexed
+            ):
+                if not st.session_state.wiki_indexed:
+                    st.warning("⚠️ Primero debes seleccionar e indexar páginas de la Wiki")
+                else:
+                    st.session_state.wiki_messages.append({"role": "user", "content": wiki_query})
+    
+                    top_k = st.session_state.get('wiki_top_k', 5)
+    
+                    # Buscar chunks relevantes
+                    with st.spinner(f"🔍 Buscando fragmentos relevantes en la Wiki..."):
+                        resultados = buscar_chunks_wiki_similares(
+                            wiki_query,
+                            st.session_state.wiki_chunks,
+                            st.session_state.wiki_embeddings,
+                            st.session_state.wiki_referencias,
+                            st.session_state.embedding_model,
+                            top_k=top_k
+                        )
+    
+                    # Construir contexto
+                    contexto = construir_contexto_wiki(resultados)
+    
+                    # Llamar a Frida
+                    system_prompt = """Eres un asistente experto en analizar documentación técnica de wikis.
+    
+    Cuando respondas:
+    1. Basa tu respuesta en la información de los fragmentos de la Wiki proporcionados
+    2. Si la información no está en los fragmentos, indícalo claramente
+    3. Menciona las páginas específicas de la Wiki cuando sea relevante
+    4. Proporciona respuestas claras y estructuradas
+    5. Si encuentras procedimientos o pasos, enuméralos claramente"""
+    
+                    payload = {
+                        "model": st.session_state.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": f"{contexto}\n\n**Consulta:** {wiki_query}"}
+                        ]
+                    }
+    
+                    if st.session_state.include_temp:
+                        payload["temperature"] = st.session_state.temperature
+                    if st.session_state.include_tokens:
+                        payload["max_tokens"] = st.session_state.max_tokens
+    
+                    with st.spinner("🤖 Frida está analizando la Wiki..."):
+                        respuesta = call_ia(payload)
+    
+                    st.session_state.wiki_messages.append({"role": "assistant", "content": respuesta})
+    
+                    # Mostrar fragmentos usados
+                    with st.expander(f"📋 Ver fragmentos de Wiki utilizados"):
+                        for i, resultado in enumerate(resultados, 1):
+                            sim = resultado["similitud"]
+                            chunk = resultado["chunk"]
+                            path = resultado["path"]
+    
+                            st.markdown(f"### Fragmento {i} - Página: {path}")
+                            st.markdown(f"**Relevancia:** {sim:.1%}")
+                            st.text(chunk[:500] + ("..." if len(chunk) > 500 else ""))
+                            st.markdown("---")
+    
+                    st.rerun()
+    
     # ================= SUBTAB 3: CREAR WIKI DESDE DOCUMENTO =================
     with subtab_crear_wiki:
         st.subheader("🔨 Crear Estructura Wiki desde Documento Funcional")
@@ -2059,501 +2057,500 @@ Cuando respondas:
         # Verificar configuración de Azure DevOps
         if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
             st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
-            st.stop()
-
-        # === PASO 1: CARGA DEL DOCUMENTO ===
-        with st.expander("📥 Paso 1: Cargar Documento Funcional", expanded=(not st.session_state.wiki_create_doc_content)):
-            st.markdown("**Sube un documento funcional (.docx o .pdf)**")
-
-            col_upload, col_info = st.columns([2, 1])
-
-            with col_upload:
-                uploaded_file = st.file_uploader(
-                    "Selecciona documento",
-                    type=["docx", "pdf"],
-                    key="wiki_create_upload",
-                    help="Documento Word o PDF con especificaciones funcionales"
-                )
-
-                if uploaded_file:
-                    file_ext = uploaded_file.name.split('.')[-1].lower()
-
-                    if st.button("📖 Procesar Documento", key="procesar_doc_wiki"):
-                        file_bytes = uploaded_file.read()
-
-                        with st.spinner(f"📖 Leyendo {file_ext.upper()}..."):
-                            if file_ext == "docx":
-                                contenido = leer_docx_desde_bytes(file_bytes)
-                            elif file_ext == "pdf":
-                                contenido = leer_pdf_desde_bytes(file_bytes)
+        else:
+            # === PASO 1: CARGA DEL DOCUMENTO ===
+            with st.expander("📥 Paso 1: Cargar Documento Funcional", expanded=(not st.session_state.wiki_create_doc_content)):
+                st.markdown("**Sube un documento funcional (.docx o .pdf)**")
+    
+                col_upload, col_info = st.columns([2, 1])
+    
+                with col_upload:
+                    uploaded_file = st.file_uploader(
+                        "Selecciona documento",
+                        type=["docx", "pdf"],
+                        key="wiki_create_upload",
+                        help="Documento Word o PDF con especificaciones funcionales"
+                    )
+    
+                    if uploaded_file:
+                        file_ext = uploaded_file.name.split('.')[-1].lower()
+    
+                        if st.button("📖 Procesar Documento", key="procesar_doc_wiki"):
+                            file_bytes = uploaded_file.read()
+    
+                            with st.spinner(f"📖 Leyendo {file_ext.upper()}..."):
+                                if file_ext == "docx":
+                                    contenido = leer_docx_desde_bytes(file_bytes)
+                                elif file_ext == "pdf":
+                                    contenido = leer_pdf_desde_bytes(file_bytes)
+                                else:
+                                    st.error("Formato no soportado")
+                                    contenido = ""
+    
+                            if contenido:
+                                st.session_state.wiki_create_doc_content = contenido
+                                st.session_state.wiki_create_doc_filename = uploaded_file.name
+                                st.success(f"✅ Documento procesado: {len(contenido)} caracteres")
+                                st.rerun()
                             else:
-                                st.error("Formato no soportado")
-                                contenido = ""
-
-                        if contenido:
-                            st.session_state.wiki_create_doc_content = contenido
-                            st.session_state.wiki_create_doc_filename = uploaded_file.name
-                            st.success(f"✅ Documento procesado: {len(contenido)} caracteres")
+                                st.error("❌ No se pudo leer el documento")
+    
+                with col_info:
+                    if st.session_state.wiki_create_doc_content:
+                        st.metric("📄 Documento cargado", st.session_state.wiki_create_doc_filename)
+                        st.metric("📝 Tamaño", f"{len(st.session_state.wiki_create_doc_content)} caracteres")
+    
+                        if st.button("🗑️ Limpiar documento", key="limpiar_doc_wiki_create"):
+                            st.session_state.wiki_create_doc_content = ""
+                            st.session_state.wiki_create_doc_filename = ""
+                            st.session_state.wiki_create_estructura_propuesta = None
+                            st.session_state.wiki_create_estructura_editada = None
+                            st.session_state.wiki_create_ready_to_create = False
                             st.rerun()
-                        else:
-                            st.error("❌ No se pudo leer el documento")
-
-            with col_info:
-                if st.session_state.wiki_create_doc_content:
-                    st.metric("📄 Documento cargado", st.session_state.wiki_create_doc_filename)
-                    st.metric("📝 Tamaño", f"{len(st.session_state.wiki_create_doc_content)} caracteres")
-
-                    if st.button("🗑️ Limpiar documento", key="limpiar_doc_wiki_create"):
-                        st.session_state.wiki_create_doc_content = ""
-                        st.session_state.wiki_create_doc_filename = ""
-                        st.session_state.wiki_create_estructura_propuesta = None
-                        st.session_state.wiki_create_estructura_editada = None
-                        st.session_state.wiki_create_ready_to_create = False
-                        st.rerun()
-
-        # === PASO 2: ANÁLISIS CON FRIDA O MODO SIMPLE ===
-        if st.session_state.wiki_create_doc_content:
-            with st.expander("🧠 Paso 2: Elegir Modo de Creación", expanded=(not st.session_state.wiki_create_estructura_propuesta)):
-                st.markdown("**Elige cómo quieres organizar el contenido en la wiki:**")
-
-                modo_creacion = st.radio(
-                    "Modo",
-                    options=["analisis", "simple_una_pagina", "simple_dos_paginas", "dividir_por_encabezados"],
-                    format_func=lambda x: {
-                        "analisis": "✨ Analizar con Frida (estructura inteligente)",
-                        "simple_una_pagina": "📄 Documento completo en 1 página (literal, sin análisis)",
-                        "simple_dos_paginas": "📑 2 páginas: Documento completo + Resumen",
-                        "dividir_por_encabezados": "📑 Dividir por encabezados (1 subpágina por punto principal)"
-                    }[x],
-                    help="Selecciona cómo organizar el contenido"
-                )
-
-                st.markdown("---")
-
-                # MODO ANÁLISIS CON FRIDA
-                if modo_creacion == "analisis":
-                    st.markdown("""
-                    **Frida analizará el documento y propondrá:**
-                    - Estructura jerárquica de páginas
-                    - Página de resumen ejecutivo
-                    - Contenido completo extraído por secciones
-                    - Página de glosario (si aplica)
-                    """)
-
-                    col_analizar, col_reset = st.columns([3, 1])
-
-                    with col_analizar:
-                        if st.button("✨ Analizar con Frida", use_container_width=True, key="analizar_frida"):
-                            estructura = analizar_documento_con_frida(
-                                st.session_state.wiki_create_doc_content,
-                                st.session_state.wiki_create_doc_filename
-                            )
-
-                            if estructura and "paginas" in estructura:
-                                st.session_state.wiki_create_estructura_propuesta = estructura
-                                st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
-                                st.success(f"✅ Estructura propuesta: {len(estructura['paginas'])} páginas")
-                                st.rerun()
-                            else:
-                                st.error("❌ No se pudo generar estructura. Intenta de nuevo.")
-
-                    with col_reset:
-                        if st.session_state.wiki_create_estructura_propuesta:
-                            if st.button("🔄 Re-analizar", use_container_width=True, key="reanalizar_frida"):
-                                st.session_state.wiki_create_estructura_propuesta = None
-                                st.session_state.wiki_create_estructura_editada = None
-                                st.rerun()
-
-                # MODO SIMPLE: UNA PÁGINA
-                elif modo_creacion == "simple_una_pagina":
-                    st.markdown("""
-                    **📄 Modo simple:**
-                    - Todo el contenido del documento en una sola página
-                    - Sin análisis, sin modificaciones
-                    - Contenido literal del documento
-                    """)
-
-                    if st.button("📄 Crear Estructura Simple (1 página)", use_container_width=True, key="crear_simple_1"):
-                        estructura = {
-                            "paginas": [
-                                {
-                                    "titulo": st.session_state.wiki_create_doc_filename.replace('.docx', '').replace('.pdf', ''),
-                                    "es_raiz": True,
-                                    "padre": None,
-                                    "contenido_markdown": f"# {st.session_state.wiki_create_doc_filename}\n\n{st.session_state.wiki_create_doc_content}",
-                                    "orden": 0
-                                }
-                            ]
-                        }
-                        st.session_state.wiki_create_estructura_propuesta = estructura
-                        st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
-                        st.session_state.wiki_create_ready_to_create = True
-                        st.success("✅ Estructura creada: 1 página con todo el contenido")
-                        st.rerun()
-
-                # MODO SIMPLE: DOS PÁGINAS
-                elif modo_creacion == "simple_dos_paginas":
-                    st.markdown("""
-                    **📑 Modo 2 páginas:**
-                    - Página 1: Resumen ejecutivo (generado por Frida)
-                    - Página 2: Documento completo (contenido literal)
-                    """)
-
-                    if st.button("📑 Crear Estructura (2 páginas)", use_container_width=True, key="crear_simple_2"):
-                        with st.spinner("Generando resumen..."):
-                            resumen = generar_resumen_documento(
-                                st.session_state.wiki_create_doc_content,
-                                st.session_state.wiki_create_doc_filename
-                            )
-
-                        doc_titulo = st.session_state.wiki_create_doc_filename.replace('.docx', '').replace('.pdf', '')
-                        estructura = {
-                            "paginas": [
-                                {
-                                    "titulo": "Resumen",
-                                    "es_raiz": True,
-                                    "padre": None,
-                                    "contenido_markdown": resumen,
-                                    "orden": 0
-                                },
-                                {
-                                    "titulo": doc_titulo,
-                                    "es_raiz": False,
-                                    "padre": "Resumen",
-                                    "contenido_markdown": f"# {doc_titulo}\n\n{st.session_state.wiki_create_doc_content}",
-                                    "orden": 1
-                                }
-                            ]
-                        }
-                        st.session_state.wiki_create_estructura_propuesta = estructura
-                        st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
-                        st.session_state.wiki_create_ready_to_create = True
-                        st.success("✅ Estructura creada: 2 páginas (Resumen + Documento completo)")
-                        st.rerun()
-
-                # MODO DIVIDIR POR ENCABEZADOS
-                elif modo_creacion == "dividir_por_encabezados":
-                    st.markdown("""
-                    **📑 Modo dividir por encabezados:**
-                    - Detecta automáticamente los puntos principales del documento
-                    - Crea 1 subpágina por cada encabezado encontrado
-                    - Contenido literal de cada sección (sin análisis)
-                    - Página índice automática
-                    """)
-
-                    if st.button("📑 Dividir Automáticamente", use_container_width=True, key="dividir_encabezados"):
-                        with st.spinner("🔍 Detectando encabezados principales..."):
-                            estructura = dividir_documento_por_encabezados(
-                                st.session_state.wiki_create_doc_content,
-                                st.session_state.wiki_create_doc_filename
-                            )
-
-                        if estructura and "paginas" in estructura:
-                            num_paginas = len(estructura['paginas'])
+    
+            # === PASO 2: ANÁLISIS CON FRIDA O MODO SIMPLE ===
+            if st.session_state.wiki_create_doc_content:
+                with st.expander("🧠 Paso 2: Elegir Modo de Creación", expanded=(not st.session_state.wiki_create_estructura_propuesta)):
+                    st.markdown("**Elige cómo quieres organizar el contenido en la wiki:**")
+    
+                    modo_creacion = st.radio(
+                        "Modo",
+                        options=["analisis", "simple_una_pagina", "simple_dos_paginas", "dividir_por_encabezados"],
+                        format_func=lambda x: {
+                            "analisis": "✨ Analizar con Frida (estructura inteligente)",
+                            "simple_una_pagina": "📄 Documento completo en 1 página (literal, sin análisis)",
+                            "simple_dos_paginas": "📑 2 páginas: Documento completo + Resumen",
+                            "dividir_por_encabezados": "📑 Dividir por encabezados (1 subpágina por punto principal)"
+                        }[x],
+                        help="Selecciona cómo organizar el contenido"
+                    )
+    
+                    st.markdown("---")
+    
+                    # MODO ANÁLISIS CON FRIDA
+                    if modo_creacion == "analisis":
+                        st.markdown("""
+                        **Frida analizará el documento y propondrá:**
+                        - Estructura jerárquica de páginas
+                        - Página de resumen ejecutivo
+                        - Contenido completo extraído por secciones
+                        - Página de glosario (si aplica)
+                        """)
+    
+                        col_analizar, col_reset = st.columns([3, 1])
+    
+                        with col_analizar:
+                            if st.button("✨ Analizar con Frida", use_container_width=True, key="analizar_frida"):
+                                estructura = analizar_documento_con_frida(
+                                    st.session_state.wiki_create_doc_content,
+                                    st.session_state.wiki_create_doc_filename
+                                )
+    
+                                if estructura and "paginas" in estructura:
+                                    st.session_state.wiki_create_estructura_propuesta = estructura
+                                    st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
+                                    st.success(f"✅ Estructura propuesta: {len(estructura['paginas'])} páginas")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ No se pudo generar estructura. Intenta de nuevo.")
+    
+                        with col_reset:
+                            if st.session_state.wiki_create_estructura_propuesta:
+                                if st.button("🔄 Re-analizar", use_container_width=True, key="reanalizar_frida"):
+                                    st.session_state.wiki_create_estructura_propuesta = None
+                                    st.session_state.wiki_create_estructura_editada = None
+                                    st.rerun()
+    
+                    # MODO SIMPLE: UNA PÁGINA
+                    elif modo_creacion == "simple_una_pagina":
+                        st.markdown("""
+                        **📄 Modo simple:**
+                        - Todo el contenido del documento en una sola página
+                        - Sin análisis, sin modificaciones
+                        - Contenido literal del documento
+                        """)
+    
+                        if st.button("📄 Crear Estructura Simple (1 página)", use_container_width=True, key="crear_simple_1"):
+                            estructura = {
+                                "paginas": [
+                                    {
+                                        "titulo": st.session_state.wiki_create_doc_filename.replace('.docx', '').replace('.pdf', ''),
+                                        "es_raiz": True,
+                                        "padre": None,
+                                        "contenido_markdown": f"# {st.session_state.wiki_create_doc_filename}\n\n{st.session_state.wiki_create_doc_content}",
+                                        "orden": 0
+                                    }
+                                ]
+                            }
                             st.session_state.wiki_create_estructura_propuesta = estructura
                             st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
                             st.session_state.wiki_create_ready_to_create = True
-
-                            if num_paginas > 1:
-                                st.success(f"✅ Estructura creada: {num_paginas} páginas (1 índice + {num_paginas-1} secciones)")
-                            else:
-                                st.warning("⚠️ No se detectaron encabezados suficientes. Se creó 1 página con todo el contenido.")
+                            st.success("✅ Estructura creada: 1 página con todo el contenido")
                             st.rerun()
-
-        # === PASO 3: REVISAR Y EDITAR ESTRUCTURA ===
-        if st.session_state.wiki_create_estructura_propuesta:
-            with st.expander("📝 Paso 3: Revisar y Editar Estructura Propuesta", expanded=True):
-                st.markdown("**Revisa la estructura propuesta por Frida. Puedes editar el contenido de cada página.**")
-
-                estructura = st.session_state.wiki_create_estructura_editada
-
-                # Mostrar árbol de páginas
-                st.markdown("#### 🌳 Estructura de Páginas:")
-
-                for idx, pagina in enumerate(estructura['paginas']):
-                    nivel = 0 if pagina.get('es_raiz', False) else 1
-                    if pagina.get('padre') and not pagina.get('es_raiz', False):
-                        # Contar niveles basándose en la jerarquía
-                        padre = pagina.get('padre', '')
-                        for p in estructura['paginas']:
-                            if p['titulo'] == padre and not p.get('es_raiz', False):
-                                nivel = 2
-                                break
-
-                    indent = "　　" * nivel
-                    icon = "📄" if pagina.get('es_raiz', False) else ("📁" if nivel == 1 else "📃")
-
-                    with st.container():
-                        col_titulo, col_acciones = st.columns([4, 1])
-
-                        with col_titulo:
-                            st.markdown(f"{indent}{icon} **{pagina['titulo']}**")
-
-                        with col_acciones:
-                            if st.button("✏️ Editar", key=f"edit_page_{idx}"):
-                                st.session_state[f"editing_page_{idx}"] = True
-                                st.rerun()
-
-                        # Mostrar editor si está en modo edición
-                        if st.session_state.get(f"editing_page_{idx}", False):
-                            st.markdown(f"**Editando:** {pagina['titulo']}")
-
-                            nuevo_titulo = st.text_input(
-                                "Título",
-                                value=pagina['titulo'],
-                                key=f"titulo_{idx}"
-                            )
-
-                            nuevo_contenido = st.text_area(
-                                "Contenido (Markdown)",
-                                value=pagina['contenido_markdown'],
-                                height=200,
-                                key=f"contenido_{idx}"
-                            )
-
-                            col_save, col_improve, col_cancel = st.columns([1, 1, 1])
-
-                            with col_save:
-                                if st.button("💾 Guardar", key=f"save_{idx}", use_container_width=True):
-                                    estructura['paginas'][idx]['titulo'] = nuevo_titulo
-                                    estructura['paginas'][idx]['contenido_markdown'] = nuevo_contenido
-                                    st.session_state.wiki_create_estructura_editada = estructura
-                                    st.session_state[f"editing_page_{idx}"] = False
-                                    st.success("✅ Guardado")
-                                    st.rerun()
-
-                            with col_improve:
-                                if st.button("✨ Mejorar con Frida", key=f"improve_{idx}", use_container_width=True):
-                                    contenido_mejorado = mejorar_contenido_pagina_con_frida(
-                                        nuevo_titulo,
-                                        nuevo_contenido,
-                                        st.session_state.wiki_create_doc_content[:3000]
-                                    )
-                                    estructura['paginas'][idx]['contenido_markdown'] = contenido_mejorado
-                                    st.session_state.wiki_create_estructura_editada = estructura
-                                    st.success("✅ Mejorado")
-                                    st.rerun()
-
-                            with col_cancel:
-                                if st.button("❌ Cancelar", key=f"cancel_{idx}", use_container_width=True):
-                                    st.session_state[f"editing_page_{idx}"] = False
-                                    st.rerun()
-
-                        st.markdown("---")
-
-                st.markdown("---")
-
-                col_confirm, col_preview = st.columns([1, 1])
-
-                with col_confirm:
-                    if st.button("✅ Confirmar Estructura", use_container_width=True, key="confirmar_estructura"):
-                        st.session_state.wiki_create_ready_to_create = True
-                        st.success("✅ Estructura confirmada. Pasa al siguiente paso.")
-                        st.rerun()
-
-                with col_preview:
-                    st.info(f"📊 Total: {len(estructura['paginas'])} páginas a crear")
-
-        # === PASO 4: SELECCIONAR WIKI Y MODO DE CREACIÓN ===
-        if st.session_state.wiki_create_ready_to_create:
-            with st.expander("🎯 Paso 4: Configurar Creación en Azure DevOps", expanded=True):
-                st.markdown("**Selecciona la Wiki de destino y el modo de creación**")
-
-                # Listar wikis
-                col_wiki1, col_wiki2 = st.columns([2, 1])
-
-                with col_wiki1:
-                    if st.button("🔍 Listar Wikis del Proyecto", key="listar_wikis_crear"):
-                        with st.spinner("Obteniendo wikis..."):
-                            wikis = obtener_wikis_proyecto(
-                                st.session_state.devops_org,
-                                st.session_state.devops_project,
-                                st.session_state.devops_pat
-                            )
-
-                        if wikis:
-                            st.session_state.available_wikis_crear = wikis
-                            st.success(f"✅ {len(wikis)} wiki(s) encontrada(s)")
-                        else:
-                            st.error("❌ No se encontraron wikis")
-
-                    # Selector de wiki
-                    if 'available_wikis_crear' in st.session_state and st.session_state.available_wikis_crear:
-                        selected_wiki_idx = st.selectbox(
-                            "Selecciona Wiki de destino",
-                            options=range(len(st.session_state.available_wikis_crear)),
-                            format_func=lambda i: f"{st.session_state.available_wikis_crear[i]['name']} ({st.session_state.available_wikis_crear[i]['type']})",
-                            key="wiki_destino_selector"
-                        )
-
-                        selected_wiki = st.session_state.available_wikis_crear[selected_wiki_idx]
-                        st.session_state.selected_wiki_id_crear = selected_wiki['id']
-                        st.session_state.selected_wiki_name_crear = selected_wiki['name']
-
-                        st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
-
-                with col_wiki2:
-                    # Modo de creación
-                    modo_creacion = st.radio(
-                        "Modo de creación",
-                        options=["nueva", "extender"],
-                        format_func=lambda x: "📄 Nueva página raíz" if x == "nueva" else "📁 Extender página existente",
-                        key="modo_creacion_radio"
-                    )
-
-                    st.session_state.wiki_create_modo = modo_creacion
-
-                # Si modo extender, mostrar páginas existentes
-                if modo_creacion == "extender" and 'selected_wiki_id_crear' in st.session_state:
-                    st.markdown("#### Selecciona página padre:")
-
-                    if st.button("📋 Listar Páginas Existentes", key="listar_paginas_existentes_crear"):
-                        with st.spinner("Obteniendo páginas..."):
-                            estructura_existente = obtener_estructura_paginas_wiki_existente(
-                                st.session_state.devops_org,
-                                st.session_state.devops_project,
-                                st.session_state.devops_pat,
-                                st.session_state.selected_wiki_id_crear
-                            )
-
-                        if estructura_existente:
-                            st.session_state.wiki_estructura_existente = estructura_existente
-                            st.success(f"✅ {len(estructura_existente)} páginas encontradas")
-
-                    if 'wiki_estructura_existente' in st.session_state and st.session_state.wiki_estructura_existente:
-                        opciones_padre = ["/ (Raíz)"] + [f"{'　' * p['nivel']}{p['nombre']}" for p in st.session_state.wiki_estructura_existente]
-                        paths_padre = ["/"] + [p['path'] for p in st.session_state.wiki_estructura_existente]
-
-                        idx_padre = st.selectbox(
-                            "Página padre",
-                            options=range(len(opciones_padre)),
-                            format_func=lambda i: opciones_padre[i],
-                            key="padre_selector"
-                        )
-
-                        st.session_state.wiki_create_pagina_padre = paths_padre[idx_padre]
-                        st.info(f"📌 Las páginas se crearán bajo: **{paths_padre[idx_padre]}**")
-
-        # === PASO 5: CREAR PÁGINAS ===
-        if st.session_state.wiki_create_ready_to_create and 'selected_wiki_id_crear' in st.session_state:
-            st.markdown("---")
-            st.markdown("### 🚀 Crear Páginas en Azure DevOps")
-
-            col_warning, col_create = st.columns([2, 1])
-
-            with col_warning:
-                st.warning("""
-                **⚠️ Atención:**
-                - Se crearán páginas reales en Azure DevOps
-                - Si ya existen páginas con el mismo nombre, se intentarán actualizar
-                - Revisa bien la estructura antes de continuar
-                """)
-
-                st.info(f"""
-                **Resumen de creación:**
-                - Wiki destino: {st.session_state.get('selected_wiki_name_crear', 'No seleccionada')}
-                - Modo: {"Nueva página raíz" if st.session_state.wiki_create_modo == "nueva" else f"Extender bajo {st.session_state.get('wiki_create_pagina_padre', '/')}"}
-                - Total de páginas: {len(st.session_state.wiki_create_estructura_editada['paginas'])}
-                """)
-
-            with col_create:
-                if st.button("🚀 Crear Páginas en Wiki", use_container_width=True, type="primary", key="crear_paginas_finales"):
-                    estructura = st.session_state.wiki_create_estructura_editada
-                    paginas = estructura['paginas']
-
-                    # Ordenar páginas por orden y jerarquía
-                    paginas_ordenadas = sorted(paginas, key=lambda x: x.get('orden', 0))
-
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-
-                    exitos = 0
-                    errores = 0
-
-                    # Mapa para tracking de paths reales de páginas creadas
-                    titulo_a_path = {}
-
-                    for idx, pagina in enumerate(paginas_ordenadas):
-                        progress_bar.progress((idx + 1) / len(paginas_ordenadas))
-                        status_text.text(f"Creando: {pagina['titulo']} ({idx + 1}/{len(paginas_ordenadas)})")
-
-                        titulo_clean = pagina['titulo'].replace(' ', '-')
-
-                        # Construir path correctamente usando el mapa de paths
-                        if st.session_state.wiki_create_modo == "nueva":
-                            # Modo nueva: crear desde raíz
-                            if pagina.get('es_raiz', False):
-                                path = f"/{titulo_clean}"
-                            else:
-                                padre_titulo = pagina.get('padre', '')
-                                if padre_titulo and padre_titulo in titulo_a_path:
-                                    # Usar el path real del padre desde el mapa
-                                    path_padre = titulo_a_path[padre_titulo]
-                                    path = f"{path_padre}/{titulo_clean}"
+    
+                    # MODO SIMPLE: DOS PÁGINAS
+                    elif modo_creacion == "simple_dos_paginas":
+                        st.markdown("""
+                        **📑 Modo 2 páginas:**
+                        - Página 1: Resumen ejecutivo (generado por Frida)
+                        - Página 2: Documento completo (contenido literal)
+                        """)
+    
+                        if st.button("📑 Crear Estructura (2 páginas)", use_container_width=True, key="crear_simple_2"):
+                            with st.spinner("Generando resumen..."):
+                                resumen = generar_resumen_documento(
+                                    st.session_state.wiki_create_doc_content,
+                                    st.session_state.wiki_create_doc_filename
+                                )
+    
+                            doc_titulo = st.session_state.wiki_create_doc_filename.replace('.docx', '').replace('.pdf', '')
+                            estructura = {
+                                "paginas": [
+                                    {
+                                        "titulo": "Resumen",
+                                        "es_raiz": True,
+                                        "padre": None,
+                                        "contenido_markdown": resumen,
+                                        "orden": 0
+                                    },
+                                    {
+                                        "titulo": doc_titulo,
+                                        "es_raiz": False,
+                                        "padre": "Resumen",
+                                        "contenido_markdown": f"# {doc_titulo}\n\n{st.session_state.wiki_create_doc_content}",
+                                        "orden": 1
+                                    }
+                                ]
+                            }
+                            st.session_state.wiki_create_estructura_propuesta = estructura
+                            st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
+                            st.session_state.wiki_create_ready_to_create = True
+                            st.success("✅ Estructura creada: 2 páginas (Resumen + Documento completo)")
+                            st.rerun()
+    
+                    # MODO DIVIDIR POR ENCABEZADOS
+                    elif modo_creacion == "dividir_por_encabezados":
+                        st.markdown("""
+                        **📑 Modo dividir por encabezados:**
+                        - Detecta automáticamente los puntos principales del documento
+                        - Crea 1 subpágina por cada encabezado encontrado
+                        - Contenido literal de cada sección (sin análisis)
+                        - Página índice automática
+                        """)
+    
+                        if st.button("📑 Dividir Automáticamente", use_container_width=True, key="dividir_encabezados"):
+                            with st.spinner("🔍 Detectando encabezados principales..."):
+                                estructura = dividir_documento_por_encabezados(
+                                    st.session_state.wiki_create_doc_content,
+                                    st.session_state.wiki_create_doc_filename
+                                )
+    
+                            if estructura and "paginas" in estructura:
+                                num_paginas = len(estructura['paginas'])
+                                st.session_state.wiki_create_estructura_propuesta = estructura
+                                st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
+                                st.session_state.wiki_create_ready_to_create = True
+    
+                                if num_paginas > 1:
+                                    st.success(f"✅ Estructura creada: {num_paginas} páginas (1 índice + {num_paginas-1} secciones)")
                                 else:
-                                    # Fallback: asumir que está en la raíz
-                                    path = f"/{titulo_clean}"
-                        else:
-                            # Modo extender: añadir bajo página padre
-                            base_path = st.session_state.wiki_create_pagina_padre
-                            if base_path == "/":
-                                path = f"/{titulo_clean}"
+                                    st.warning("⚠️ No se detectaron encabezados suficientes. Se creó 1 página con todo el contenido.")
+                                st.rerun()
+    
+            # === PASO 3: REVISAR Y EDITAR ESTRUCTURA ===
+            if st.session_state.wiki_create_estructura_propuesta:
+                with st.expander("📝 Paso 3: Revisar y Editar Estructura Propuesta", expanded=True):
+                    st.markdown("**Revisa la estructura propuesta por Frida. Puedes editar el contenido de cada página.**")
+    
+                    estructura = st.session_state.wiki_create_estructura_editada
+    
+                    # Mostrar árbol de páginas
+                    st.markdown("#### 🌳 Estructura de Páginas:")
+    
+                    for idx, pagina in enumerate(estructura['paginas']):
+                        nivel = 0 if pagina.get('es_raiz', False) else 1
+                        if pagina.get('padre') and not pagina.get('es_raiz', False):
+                            # Contar niveles basándose en la jerarquía
+                            padre = pagina.get('padre', '')
+                            for p in estructura['paginas']:
+                                if p['titulo'] == padre and not p.get('es_raiz', False):
+                                    nivel = 2
+                                    break
+    
+                        indent = "　　" * nivel
+                        icon = "📄" if pagina.get('es_raiz', False) else ("📁" if nivel == 1 else "📃")
+    
+                        with st.container():
+                            col_titulo, col_acciones = st.columns([4, 1])
+    
+                            with col_titulo:
+                                st.markdown(f"{indent}{icon} **{pagina['titulo']}**")
+    
+                            with col_acciones:
+                                if st.button("✏️ Editar", key=f"edit_page_{idx}"):
+                                    st.session_state[f"editing_page_{idx}"] = True
+                                    st.rerun()
+    
+                            # Mostrar editor si está en modo edición
+                            if st.session_state.get(f"editing_page_{idx}", False):
+                                st.markdown(f"**Editando:** {pagina['titulo']}")
+    
+                                nuevo_titulo = st.text_input(
+                                    "Título",
+                                    value=pagina['titulo'],
+                                    key=f"titulo_{idx}"
+                                )
+    
+                                nuevo_contenido = st.text_area(
+                                    "Contenido (Markdown)",
+                                    value=pagina['contenido_markdown'],
+                                    height=200,
+                                    key=f"contenido_{idx}"
+                                )
+    
+                                col_save, col_improve, col_cancel = st.columns([1, 1, 1])
+    
+                                with col_save:
+                                    if st.button("💾 Guardar", key=f"save_{idx}", use_container_width=True):
+                                        estructura['paginas'][idx]['titulo'] = nuevo_titulo
+                                        estructura['paginas'][idx]['contenido_markdown'] = nuevo_contenido
+                                        st.session_state.wiki_create_estructura_editada = estructura
+                                        st.session_state[f"editing_page_{idx}"] = False
+                                        st.success("✅ Guardado")
+                                        st.rerun()
+    
+                                with col_improve:
+                                    if st.button("✨ Mejorar con Frida", key=f"improve_{idx}", use_container_width=True):
+                                        contenido_mejorado = mejorar_contenido_pagina_con_frida(
+                                            nuevo_titulo,
+                                            nuevo_contenido,
+                                            st.session_state.wiki_create_doc_content[:3000]
+                                        )
+                                        estructura['paginas'][idx]['contenido_markdown'] = contenido_mejorado
+                                        st.session_state.wiki_create_estructura_editada = estructura
+                                        st.success("✅ Mejorado")
+                                        st.rerun()
+    
+                                with col_cancel:
+                                    if st.button("❌ Cancelar", key=f"cancel_{idx}", use_container_width=True):
+                                        st.session_state[f"editing_page_{idx}"] = False
+                                        st.rerun()
+    
+                            st.markdown("---")
+    
+                    st.markdown("---")
+    
+                    col_confirm, col_preview = st.columns([1, 1])
+    
+                    with col_confirm:
+                        if st.button("✅ Confirmar Estructura", use_container_width=True, key="confirmar_estructura"):
+                            st.session_state.wiki_create_ready_to_create = True
+                            st.success("✅ Estructura confirmada. Pasa al siguiente paso.")
+                            st.rerun()
+    
+                    with col_preview:
+                        st.info(f"📊 Total: {len(estructura['paginas'])} páginas a crear")
+    
+            # === PASO 4: SELECCIONAR WIKI Y MODO DE CREACIÓN ===
+            if st.session_state.wiki_create_ready_to_create:
+                with st.expander("🎯 Paso 4: Configurar Creación en Azure DevOps", expanded=True):
+                    st.markdown("**Selecciona la Wiki de destino y el modo de creación**")
+    
+                    # Listar wikis
+                    col_wiki1, col_wiki2 = st.columns([2, 1])
+    
+                    with col_wiki1:
+                        if st.button("🔍 Listar Wikis del Proyecto", key="listar_wikis_crear"):
+                            with st.spinner("Obteniendo wikis..."):
+                                wikis = obtener_wikis_proyecto(
+                                    st.session_state.devops_org,
+                                    st.session_state.devops_project,
+                                    st.session_state.devops_pat
+                                )
+    
+                            if wikis:
+                                st.session_state.available_wikis_crear = wikis
+                                st.success(f"✅ {len(wikis)} wiki(s) encontrada(s)")
                             else:
+                                st.error("❌ No se encontraron wikis")
+    
+                        # Selector de wiki
+                        if 'available_wikis_crear' in st.session_state and st.session_state.available_wikis_crear:
+                            selected_wiki_idx = st.selectbox(
+                                "Selecciona Wiki de destino",
+                                options=range(len(st.session_state.available_wikis_crear)),
+                                format_func=lambda i: f"{st.session_state.available_wikis_crear[i]['name']} ({st.session_state.available_wikis_crear[i]['type']})",
+                                key="wiki_destino_selector"
+                            )
+    
+                            selected_wiki = st.session_state.available_wikis_crear[selected_wiki_idx]
+                            st.session_state.selected_wiki_id_crear = selected_wiki['id']
+                            st.session_state.selected_wiki_name_crear = selected_wiki['name']
+    
+                            st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
+    
+                    with col_wiki2:
+                        # Modo de creación
+                        modo_creacion = st.radio(
+                            "Modo de creación",
+                            options=["nueva", "extender"],
+                            format_func=lambda x: "📄 Nueva página raíz" if x == "nueva" else "📁 Extender página existente",
+                            key="modo_creacion_radio"
+                        )
+    
+                        st.session_state.wiki_create_modo = modo_creacion
+    
+                    # Si modo extender, mostrar páginas existentes
+                    if modo_creacion == "extender" and 'selected_wiki_id_crear' in st.session_state:
+                        st.markdown("#### Selecciona página padre:")
+    
+                        if st.button("📋 Listar Páginas Existentes", key="listar_paginas_existentes_crear"):
+                            with st.spinner("Obteniendo páginas..."):
+                                estructura_existente = obtener_estructura_paginas_wiki_existente(
+                                    st.session_state.devops_org,
+                                    st.session_state.devops_project,
+                                    st.session_state.devops_pat,
+                                    st.session_state.selected_wiki_id_crear
+                                )
+    
+                            if estructura_existente:
+                                st.session_state.wiki_estructura_existente = estructura_existente
+                                st.success(f"✅ {len(estructura_existente)} páginas encontradas")
+    
+                        if 'wiki_estructura_existente' in st.session_state and st.session_state.wiki_estructura_existente:
+                            opciones_padre = ["/ (Raíz)"] + [f"{'　' * p['nivel']}{p['nombre']}" for p in st.session_state.wiki_estructura_existente]
+                            paths_padre = ["/"] + [p['path'] for p in st.session_state.wiki_estructura_existente]
+    
+                            idx_padre = st.selectbox(
+                                "Página padre",
+                                options=range(len(opciones_padre)),
+                                format_func=lambda i: opciones_padre[i],
+                                key="padre_selector"
+                            )
+    
+                            st.session_state.wiki_create_pagina_padre = paths_padre[idx_padre]
+                            st.info(f"📌 Las páginas se crearán bajo: **{paths_padre[idx_padre]}**")
+    
+            # === PASO 5: CREAR PÁGINAS ===
+            if st.session_state.wiki_create_ready_to_create and 'selected_wiki_id_crear' in st.session_state:
+                st.markdown("---")
+                st.markdown("### 🚀 Crear Páginas en Azure DevOps")
+    
+                col_warning, col_create = st.columns([2, 1])
+    
+                with col_warning:
+                    st.warning("""
+                    **⚠️ Atención:**
+                    - Se crearán páginas reales en Azure DevOps
+                    - Si ya existen páginas con el mismo nombre, se intentarán actualizar
+                    - Revisa bien la estructura antes de continuar
+                    """)
+    
+                    st.info(f"""
+                    **Resumen de creación:**
+                    - Wiki destino: {st.session_state.get('selected_wiki_name_crear', 'No seleccionada')}
+                    - Modo: {"Nueva página raíz" if st.session_state.wiki_create_modo == "nueva" else f"Extender bajo {st.session_state.get('wiki_create_pagina_padre', '/')}"}
+                    - Total de páginas: {len(st.session_state.wiki_create_estructura_editada['paginas'])}
+                    """)
+    
+                with col_create:
+                    if st.button("🚀 Crear Páginas en Wiki", use_container_width=True, type="primary", key="crear_paginas_finales"):
+                        estructura = st.session_state.wiki_create_estructura_editada
+                        paginas = estructura['paginas']
+    
+                        # Ordenar páginas por orden y jerarquía
+                        paginas_ordenadas = sorted(paginas, key=lambda x: x.get('orden', 0))
+    
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+    
+                        exitos = 0
+                        errores = 0
+    
+                        # Mapa para tracking de paths reales de páginas creadas
+                        titulo_a_path = {}
+    
+                        for idx, pagina in enumerate(paginas_ordenadas):
+                            progress_bar.progress((idx + 1) / len(paginas_ordenadas))
+                            status_text.text(f"Creando: {pagina['titulo']} ({idx + 1}/{len(paginas_ordenadas)})")
+    
+                            titulo_clean = pagina['titulo'].replace(' ', '-')
+    
+                            # Construir path correctamente usando el mapa de paths
+                            if st.session_state.wiki_create_modo == "nueva":
+                                # Modo nueva: crear desde raíz
                                 if pagina.get('es_raiz', False):
-                                    path = f"{base_path}/{titulo_clean}"
+                                    path = f"/{titulo_clean}"
                                 else:
                                     padre_titulo = pagina.get('padre', '')
                                     if padre_titulo and padre_titulo in titulo_a_path:
-                                        # Usar el path real del padre
+                                        # Usar el path real del padre desde el mapa
                                         path_padre = titulo_a_path[padre_titulo]
                                         path = f"{path_padre}/{titulo_clean}"
                                     else:
+                                        # Fallback: asumir que está en la raíz
+                                        path = f"/{titulo_clean}"
+                            else:
+                                # Modo extender: añadir bajo página padre
+                                base_path = st.session_state.wiki_create_pagina_padre
+                                if base_path == "/":
+                                    path = f"/{titulo_clean}"
+                                else:
+                                    if pagina.get('es_raiz', False):
                                         path = f"{base_path}/{titulo_clean}"
-
-                        # Crear la página
-                        success, result = crear_pagina_wiki_azure(
-                            st.session_state.devops_org,
-                            st.session_state.devops_project,
-                            st.session_state.devops_pat,
-                            st.session_state.selected_wiki_id_crear,
-                            path,
-                            pagina['contenido_markdown']
-                        )
-
-                        if success:
-                            exitos += 1
-                            # Guardar el path real en el mapa
-                            titulo_a_path[pagina['titulo']] = path
-                            st.success(f"✅ Creada: {pagina['titulo']} → {path}")
-                        else:
-                            errores += 1
-                            st.error(f"❌ Error: {pagina['titulo']}")
-
-                    progress_bar.progress(1.0)
-                    status_text.text("¡Creación completada!")
-
-                    st.markdown("---")
-                    st.success(f"""
-                    **✅ Proceso completado**
-                    - Páginas creadas: {exitos}
-                    - Errores: {errores}
-                    - Total procesadas: {len(paginas_ordenadas)}
-                    """)
-
-                    # Botón para limpiar y empezar de nuevo
-                    if st.button("🔄 Crear otra wiki desde documento", key="reset_all_wiki_create"):
-                        st.session_state.wiki_create_doc_content = ""
-                        st.session_state.wiki_create_doc_filename = ""
-                        st.session_state.wiki_create_estructura_propuesta = None
-                        st.session_state.wiki_create_estructura_editada = None
-                        st.session_state.wiki_create_ready_to_create = False
-                        if 'available_wikis_crear' in st.session_state:
-                            del st.session_state.available_wikis_crear
-                        if 'wiki_estructura_existente' in st.session_state:
-                            del st.session_state.wiki_estructura_existente
-                        st.rerun()
-
-# ================= TAB 3: ANÁLISIS DOCUMENTOS =================
+                                    else:
+                                        padre_titulo = pagina.get('padre', '')
+                                        if padre_titulo and padre_titulo in titulo_a_path:
+                                            # Usar el path real del padre
+                                            path_padre = titulo_a_path[padre_titulo]
+                                            path = f"{path_padre}/{titulo_clean}"
+                                        else:
+                                            path = f"{base_path}/{titulo_clean}"
+    
+                            # Crear la página
+                            success, result = crear_pagina_wiki_azure(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat,
+                                st.session_state.selected_wiki_id_crear,
+                                path,
+                                pagina['contenido_markdown']
+                            )
+    
+                            if success:
+                                exitos += 1
+                                # Guardar el path real en el mapa
+                                titulo_a_path[pagina['titulo']] = path
+                                st.success(f"✅ Creada: {pagina['titulo']} → {path}")
+                            else:
+                                errores += 1
+                                st.error(f"❌ Error: {pagina['titulo']}")
+    
+                        progress_bar.progress(1.0)
+                        status_text.text("¡Creación completada!")
+    
+                        st.markdown("---")
+                        st.success(f"""
+                        **✅ Proceso completado**
+                        - Páginas creadas: {exitos}
+                        - Errores: {errores}
+                        - Total procesadas: {len(paginas_ordenadas)}
+                        """)
+    
+                        # Botón para limpiar y empezar de nuevo
+                        if st.button("🔄 Crear otra wiki desde documento", key="reset_all_wiki_create"):
+                            st.session_state.wiki_create_doc_content = ""
+                            st.session_state.wiki_create_doc_filename = ""
+                            st.session_state.wiki_create_estructura_propuesta = None
+                            st.session_state.wiki_create_estructura_editada = None
+                            st.session_state.wiki_create_ready_to_create = False
+                            if 'available_wikis_crear' in st.session_state:
+                                del st.session_state.available_wikis_crear
+                            if 'wiki_estructura_existente' in st.session_state:
+                                del st.session_state.wiki_estructura_existente
+                            st.rerun()
+    
+    # ================= TAB 3: ANÁLISIS DOCUMENTOS =================
 with tab_doc:
     st.title("📄 Análisis de Documentos")
     st.markdown("Carga un documento Word y haz preguntas sobre su contenido o genera work items automáticamente")
