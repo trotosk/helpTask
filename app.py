@@ -121,6 +121,62 @@ for k, v in defaults.items():
 CHUNK_SIZE = 10000  # caracteres por fragmento para archivos grandes
 
 # ==================================================
+# MAPEO DE CAMPOS POR TIPO DE WORK ITEM
+# ==================================================
+WORKITEM_FIELD_MAPPING = {
+    "User Story": {
+        "titulo": {"azure_field": "System.Title", "enabled": True},
+        "descripcion": {"azure_field": "System.Description", "enabled": True},
+        "acceptance_criteria": {"azure_field": "Microsoft.VSTS.Common.AcceptanceCriteria", "enabled": True},
+        "dependencies": {"azure_field": "Custom.Dependencies", "enabled": True},
+        "riesgos": {"azure_field": "Custom.Riesgos_US", "enabled": True},
+        "value_area": {"azure_field": "Microsoft.VSTS.Common.ValueArea", "enabled": True},
+        "team": {"azure_field": "Custom.User_Story_Team", "enabled": True},
+        "source": {"azure_field": "Custom.Source", "enabled": True}
+    },
+    "Feature": {
+        "titulo": {"azure_field": "System.Title", "enabled": True},
+        "descripcion": {"azure_field": "System.Description", "enabled": True},
+        "acceptance_criteria": {"azure_field": "", "enabled": False},  # No existe en Azure
+        "dependencies": {"azure_field": "Custom.Dependencias_feature", "enabled": True},
+        "riesgos": {"azure_field": "Custom.Riesgos_feature", "enabled": True},
+        "value_area": {"azure_field": "Microsoft.VSTS.Common.ValueArea", "enabled": True},
+        "team": {"azure_field": "Custom.Team", "enabled": True},
+        "source": {"azure_field": "Custom.Source", "enabled": True}
+    },
+    "Epic": {
+        "titulo": {"azure_field": "System.Title", "enabled": True},
+        "descripcion": {"azure_field": "System.Description", "enabled": True},
+        "acceptance_criteria": {"azure_field": "", "enabled": False},  # No existe en Azure
+        "dependencies": {"azure_field": "Custom.Dependencias", "enabled": True},
+        "riesgos": {"azure_field": "Custom.Riesgos", "enabled": True},
+        "value_area": {"azure_field": "", "enabled": False},  # No existe en Azure
+        "team": {"azure_field": "", "enabled": False},  # No existe en Azure
+        "source": {"azure_field": "", "enabled": False}  # No existe en Azure
+    },
+    "Bug": {
+        "titulo": {"azure_field": "System.Title", "enabled": True},
+        "descripcion": {"azure_field": "System.Description", "enabled": True},
+        "acceptance_criteria": {"azure_field": "Microsoft.VSTS.Common.AcceptanceCriteria", "enabled": True},
+        "dependencies": {"azure_field": "Custom.Dependencies", "enabled": True},
+        "riesgos": {"azure_field": "Custom.Riesgos", "enabled": True},
+        "value_area": {"azure_field": "Microsoft.VSTS.Common.ValueArea", "enabled": True},
+        "team": {"azure_field": "Custom.Team", "enabled": True},
+        "source": {"azure_field": "Custom.Source", "enabled": True}
+    },
+    "Task": {
+        "titulo": {"azure_field": "System.Title", "enabled": True},
+        "descripcion": {"azure_field": "System.Description", "enabled": True},
+        "acceptance_criteria": {"azure_field": "Microsoft.VSTS.Common.AcceptanceCriteria", "enabled": True},
+        "dependencies": {"azure_field": "Custom.Dependencies", "enabled": True},
+        "riesgos": {"azure_field": "Custom.Riesgos", "enabled": True},
+        "value_area": {"azure_field": "Microsoft.VSTS.Common.ValueArea", "enabled": True},
+        "team": {"azure_field": "Custom.Team", "enabled": True},
+        "source": {"azure_field": "Custom.Source", "enabled": True}
+    }
+}
+
+# ==================================================
 # HELPERS ORIGINALES
 # ==================================================
 def call_ia(payload):
@@ -344,26 +400,18 @@ def descargar_attachment_devops(attachment_url, pat):
         st.error(f"Error al descargar attachment: {str(e)}")
         return None
 
-def crear_workitem_devops(organization, project, pat, work_item_type, campos):
+def crear_workitem_devops(organization, project, pat, work_item_type, campos, field_mappings):
     """
-    Crea un work item en Azure DevOps
+    Crea un work item en Azure DevOps con nombres de campos personalizables
 
     Args:
         organization: Organización de Azure DevOps
         project: Proyecto de Azure DevOps
         pat: Personal Access Token
         work_item_type: Tipo de work item (Bug, User Story, Task, Feature, Epic)
-        campos: Diccionario con los campos del work item
-            - titulo (requerido)
-            - descripcion (requerido)
-            - acceptance_criteria (opcional)
-            - dependencies (opcional)
-            - riesgos (opcional)
-            - team (opcional)
-            - source (opcional)
-            - value_area (opcional): Architectural, Business, Design, Development
-            - area_path (opcional)
-            - iteration_path (opcional)
+        campos: Diccionario con los valores de los campos del work item
+        field_mappings: Diccionario con el mapeo de nombres de campos locales a Azure
+            Formato: {'campo_local': {'azure_field': 'Azure.Field.Name', 'enabled': True/False, 'value': 'valor'}}
 
     Returns:
         Diccionario con 'success', 'id', 'url', 'error'
@@ -383,29 +431,21 @@ def crear_workitem_devops(organization, project, pat, work_item_type, campos):
     # Azure DevOps requiere un array de operaciones de tipo "add"
     body = []
 
-    # Campos obligatorios
-    if campos.get('titulo'):
-        body.append({
-            "op": "add",
-            "path": "/fields/System.Title",
-            "value": campos['titulo']
-        })
+    # Recorrer todos los campos y agregar los que estén habilitados y tengan valor
+    for field_name, field_value in campos.items():
+        # Verificar si el campo tiene configuración en field_mappings
+        if field_name in field_mappings:
+            mapping = field_mappings[field_name]
 
-    if campos.get('descripcion'):
-        body.append({
-            "op": "add",
-            "path": "/fields/System.Description",
-            "value": campos['descripcion']
-        })
+            # Solo agregar si está habilitado, tiene un campo de Azure definido, y tiene valor
+            if mapping.get('enabled', False) and mapping.get('azure_field') and field_value:
+                body.append({
+                    "op": "add",
+                    "path": f"/fields/{mapping['azure_field']}",
+                    "value": field_value
+                })
 
-    # Campos opcionales
-    if campos.get('acceptance_criteria'):
-        body.append({
-            "op": "add",
-            "path": "/fields/Microsoft.VSTS.Common.AcceptanceCriteria",
-            "value": campos['acceptance_criteria']
-        })
-
+    # Area e Iteration son casos especiales (siempre System.AreaPath y System.IterationPath)
     if campos.get('area_path'):
         body.append({
             "op": "add",
@@ -418,43 +458,6 @@ def crear_workitem_devops(organization, project, pat, work_item_type, campos):
             "op": "add",
             "path": "/fields/System.IterationPath",
             "value": campos['iteration_path']
-        })
-
-    if campos.get('value_area'):
-        # Value Area: Architectural, Business, Design, Development
-        body.append({
-            "op": "add",
-            "path": "/fields/Microsoft.VSTS.Common.ValueArea",
-            "value": campos['value_area']
-        })
-
-    # Campos personalizados (pueden variar según configuración del proyecto)
-    if campos.get('dependencies'):
-        body.append({
-            "op": "add",
-            "path": "/fields/Custom.Dependencies",
-            "value": campos['dependencies']
-        })
-
-    if campos.get('riesgos'):
-        body.append({
-            "op": "add",
-            "path": "/fields/Custom.Riesgos",
-            "value": campos['riesgos']
-        })
-
-    if campos.get('team'):
-        body.append({
-            "op": "add",
-            "path": "/fields/Custom.Team",
-            "value": campos['team']
-        })
-
-    if campos.get('source'):
-        body.append({
-            "op": "add",
-            "path": "/fields/Custom.Source",
-            "value": campos['source']
         })
 
     try:
@@ -2718,6 +2721,10 @@ with tab_devops:
                 st.session_state.workitem_generated = False
             if 'workitem_data' not in st.session_state:
                 st.session_state.workitem_data = {}
+            if 'custom_prompt_workitem' not in st.session_state:
+                st.session_state.custom_prompt_workitem = ""
+            if 'current_field_mappings' not in st.session_state:
+                st.session_state.current_field_mappings = {}
 
             # === PASO 1: GENERAR CON IA (OPCIONAL) ===
             with st.expander("🤖 Paso 1 (Opcional): Generar campos con IA", expanded=not st.session_state.workitem_generated):
@@ -2736,7 +2743,8 @@ with tab_devops:
                             "PO Definicion spike",
                             "Libre"
                         ],
-                        help="Selecciona una plantilla para guiar a la IA"
+                        help="Selecciona una plantilla para guiar a la IA",
+                        key="workitem_template_choice"
                     )
 
                 with col_desc:
@@ -2744,18 +2752,23 @@ with tab_devops:
                         "Descripción de la tarea",
                         height=150,
                         placeholder="Ejemplo: Crear una funcionalidad para exportar reportes en PDF...",
-                        help="Describe lo que quieres que haga la tarea"
+                        help="Describe lo que quieres que haga la tarea",
+                        key="workitem_descripcion_ia"
                     )
 
-                if st.button("🎯 Generar campos con IA", disabled=not descripcion_ia):
-                    with st.spinner("🧠 Frida está generando los campos de la tarea..."):
-                        try:
-                            # Obtener plantilla y hacer el prompt
-                            template = get_template(template_choice)
-                            prompt_base = template.format(input=descripcion_ia)
+                # Área de texto editable para el prompt
+                st.markdown("---")
+                st.markdown("**✏️ Prompt que se enviará a la IA (editable)**")
 
-                            # Agregar instrucciones JSON al final para TODAS las plantillas
-                            json_instructions = """
+                # Generar el prompt base basado en la plantilla seleccionada
+                template = get_template(template_choice)
+                if descripcion_ia:
+                    prompt_preview = template.format(input=descripcion_ia)
+                else:
+                    prompt_preview = template.replace("{input}", "[Tu descripción aquí]")
+
+                # Agregar instrucciones JSON al final
+                json_instructions = """
 
 IMPORTANTE: Además de todo lo anterior, debes devolver AL FINAL de tu respuesta un bloque JSON válido con la siguiente estructura EXACTA:
 
@@ -2780,24 +2793,37 @@ REGLAS CRÍTICAS:
 5. Si no hay información para un campo opcional, usa cadena vacía ""
 """
 
-                            # Combinar prompt base con instrucciones JSON
-                            prompt = prompt_base + json_instructions
+                full_prompt = prompt_preview + json_instructions
+
+                custom_prompt = st.text_area(
+                    "Prompt completo",
+                    value=st.session_state.custom_prompt_workitem if st.session_state.custom_prompt_workitem else full_prompt,
+                    height=300,
+                    help="Puedes editar este prompt antes de enviarlo a la IA",
+                    key="workitem_custom_prompt_input"
+                )
+
+                # Guardar el prompt personalizado en session_state
+                st.session_state.custom_prompt_workitem = custom_prompt
+
+                if st.button("🎯 Generar campos con IA", disabled=not descripcion_ia, key="workitem_generar_ia_btn"):
+                    with st.spinner("🧠 Frida está generando los campos de la tarea..."):
+                        try:
+                            # Usar el prompt personalizado o el generado
+                            prompt_to_use = st.session_state.custom_prompt_workitem if st.session_state.custom_prompt_workitem else full_prompt
 
                             payload = {
                                 "model": st.session_state.model,
                                 "messages": [
                                     {"role": "system", "content": "Eres un experto Product Owner. Genera una respuesta detallada según la plantilla, y AL FINAL incluye un JSON válido con los campos estructurados."},
-                                    {"role": "user", "content": prompt}
+                                    {"role": "user", "content": prompt_to_use}
                                 ]
                             }
 
                             response = call_ia(payload)
 
                             # Extraer el JSON de la respuesta
-                            # La respuesta puede tener texto antes del JSON, así que buscamos el bloque JSON
                             response_text = response.strip()
-
-                            # Buscar el último bloque JSON en la respuesta
                             json_str = None
 
                             # Intentar encontrar JSON entre ```json y ```
@@ -2809,10 +2835,8 @@ REGLAS CRÍTICAS:
 
                             # Si no se encontró con markdown, buscar entre llaves
                             if not json_str:
-                                # Buscar la última apertura de llave
                                 last_open = response_text.rfind("{")
                                 if last_open != -1:
-                                    # Buscar el cierre correspondiente
                                     brace_count = 0
                                     for i in range(last_open, len(response_text)):
                                         if response_text[i] == "{":
@@ -2870,16 +2894,25 @@ REGLAS CRÍTICAS:
             with col_tipo:
                 work_item_type = st.selectbox(
                     "Tipo de tarea *",
-                    options=["User Story", "Bug", "Task", "Feature", "Epic"],
-                    help="Tipo de work item a crear"
+                    options=["User Story", "Feature", "Epic", "Bug", "Task"],
+                    help="Tipo de work item a crear",
+                    key="workitem_type_selector"
                 )
+
+            # Cargar field mappings basados en el tipo seleccionado
+            if work_item_type in WORKITEM_FIELD_MAPPING:
+                st.session_state.current_field_mappings = WORKITEM_FIELD_MAPPING[work_item_type].copy()
+            else:
+                # Fallback a User Story si no existe el tipo
+                st.session_state.current_field_mappings = WORKITEM_FIELD_MAPPING["User Story"].copy()
 
             with col_area:
                 area_path = st.text_input(
                     "Área (Area Path)",
                     value="",
                     placeholder="Ejemplo: Sales\\MySaga POC",
-                    help="Área del proyecto. Deja vacío para usar la raíz del proyecto"
+                    help="Área del proyecto. Deja vacío para usar la raíz del proyecto",
+                    key="workitem_area_path"
                 )
 
             with col_iteration:
@@ -2887,72 +2920,366 @@ REGLAS CRÍTICAS:
                     "Iteración (Iteration Path)",
                     value="",
                     placeholder="Ejemplo: Sprint 1",
-                    help="Iteración/Sprint. Deja vacío para la iteración por defecto"
+                    help="Iteración/Sprint. Deja vacío para la iteración por defecto",
+                    key="workitem_iteration_path"
                 )
 
-            # Campos obligatorios
-            titulo = st.text_input(
-                "Título *",
-                value=st.session_state.workitem_data.get('titulo', ''),
-                placeholder="Título conciso de la tarea",
-                help="Campo obligatorio"
-            )
+            st.markdown("---")
+            st.markdown("#### 🔧 Configuración de campos y mapeo a Azure DevOps")
+            st.markdown("*Activa/desactiva campos y edita los nombres de campos en Azure DevOps*")
 
-            descripcion = st.text_area(
-                "Descripción *",
-                value=st.session_state.workitem_data.get('descripcion', ''),
-                height=150,
-                placeholder="Descripción detallada de la tarea...",
-                help="Campo obligatorio. Puede usar HTML"
-            )
+            # Diccionario para almacenar los estados actualizados de los campos
+            updated_mappings = {}
+
+            # Definir labels amigables para cada campo
+            field_labels = {
+                'titulo': 'Título',
+                'descripcion': 'Descripción',
+                'acceptance_criteria': 'Criterios de Aceptación',
+                'dependencies': 'Dependencias',
+                'riesgos': 'Riesgos',
+                'team': 'Team',
+                'source': 'Source',
+                'value_area': 'Value Area'
+            }
+
+            # Campos con sus valores
+            field_values = {}
+
+            # TITULO (siempre requerido)
+            st.markdown("##### Campos Obligatorios")
+
+            # Título
+            field_name = 'titulo'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "System.Title", "enabled": True})
+
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                titulo_enabled = st.checkbox(
+                    "",
+                    value=mapping.get('enabled', True),
+                    key=f"enable_{field_name}",
+                    help="Este campo es obligatorio",
+                    disabled=True  # Título siempre habilitado
+                )
+            with col_content:
+                col_label, col_azure, col_value = st.columns([2, 3, 5])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}** *")
+                with col_azure:
+                    titulo_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'System.Title'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="System.Title"
+                    )
+                with col_value:
+                    titulo_value = st.text_input(
+                        "Valor",
+                        value=st.session_state.workitem_data.get(field_name, ''),
+                        placeholder="Título conciso de la tarea",
+                        key=f"value_{field_name}",
+                        label_visibility="collapsed"
+                    )
+
+            updated_mappings[field_name] = {
+                "azure_field": titulo_azure_field,
+                "enabled": titulo_enabled
+            }
+            field_values[field_name] = titulo_value
+
+            # Descripción
+            field_name = 'descripcion'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "System.Description", "enabled": True})
+
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                descripcion_enabled = st.checkbox(
+                    "",
+                    value=mapping.get('enabled', True),
+                    key=f"enable_{field_name}",
+                    help="Este campo es obligatorio",
+                    disabled=True  # Descripción siempre habilitada
+                )
+            with col_content:
+                col_label, col_azure = st.columns([2, 8])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}** *")
+                with col_azure:
+                    descripcion_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'System.Description'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="System.Description"
+                    )
+                descripcion_value = st.text_area(
+                    "Valor",
+                    value=st.session_state.workitem_data.get(field_name, ''),
+                    height=150,
+                    placeholder="Descripción detallada de la tarea (puede usar HTML)...",
+                    key=f"value_{field_name}",
+                    label_visibility="collapsed"
+                )
+
+            updated_mappings[field_name] = {
+                "azure_field": descripcion_azure_field,
+                "enabled": descripcion_enabled
+            }
+            field_values[field_name] = descripcion_value
 
             # Campos opcionales
-            col_left, col_right = st.columns(2)
+            st.markdown("##### Campos Opcionales")
 
-            with col_left:
-                acceptance_criteria = st.text_area(
-                    "Criterios de Aceptación",
-                    value=st.session_state.workitem_data.get('acceptance_criteria', ''),
-                    height=150,
-                    placeholder="Criterios que deben cumplirse para considerar la tarea completa...",
-                    help="Puede usar HTML para formato"
+            # Acceptance Criteria
+            field_name = 'acceptance_criteria'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "", "enabled": False})
+
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                ac_enabled = st.checkbox(
+                    "",
+                    value=mapping.get('enabled', False),
+                    key=f"enable_{field_name}"
+                )
+            with col_content:
+                col_label, col_azure = st.columns([2, 8])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}**")
+                with col_azure:
+                    ac_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'Microsoft.VSTS.Common.AcceptanceCriteria'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="Microsoft.VSTS.Common.AcceptanceCriteria",
+                        disabled=not ac_enabled
+                    )
+                ac_value = st.text_area(
+                    "Valor",
+                    value=st.session_state.workitem_data.get(field_name, ''),
+                    height=120,
+                    placeholder="Criterios de aceptación (puede usar HTML)...",
+                    key=f"value_{field_name}",
+                    label_visibility="collapsed",
+                    disabled=not ac_enabled
                 )
 
-                dependencies = st.text_area(
-                    "Dependencias",
-                    value=st.session_state.workitem_data.get('dependencies', ''),
+            updated_mappings[field_name] = {
+                "azure_field": ac_azure_field,
+                "enabled": ac_enabled
+            }
+            field_values[field_name] = ac_value if ac_enabled else ""
+
+            # Dependencies
+            field_name = 'dependencies'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "", "enabled": False})
+
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                dep_enabled = st.checkbox(
+                    "",
+                    value=mapping.get('enabled', False),
+                    key=f"enable_{field_name}"
+                )
+            with col_content:
+                col_label, col_azure = st.columns([2, 8])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}**")
+                with col_azure:
+                    dep_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'Custom.Dependencies'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="Custom.Dependencies",
+                        disabled=not dep_enabled
+                    )
+                dep_value = st.text_area(
+                    "Valor",
+                    value=st.session_state.workitem_data.get(field_name, ''),
                     height=100,
                     placeholder="Dependencias con otras tareas o sistemas...",
+                    key=f"value_{field_name}",
+                    label_visibility="collapsed",
+                    disabled=not dep_enabled
                 )
 
-                riesgos = st.text_area(
-                    "Riesgos",
-                    value=st.session_state.workitem_data.get('riesgos', ''),
+            updated_mappings[field_name] = {
+                "azure_field": dep_azure_field,
+                "enabled": dep_enabled
+            }
+            field_values[field_name] = dep_value if dep_enabled else ""
+
+            # Riesgos
+            field_name = 'riesgos'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "", "enabled": False})
+
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                riesgos_enabled = st.checkbox(
+                    "",
+                    value=mapping.get('enabled', False),
+                    key=f"enable_{field_name}"
+                )
+            with col_content:
+                col_label, col_azure = st.columns([2, 8])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}**")
+                with col_azure:
+                    riesgos_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'Custom.Riesgos'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="Custom.Riesgos",
+                        disabled=not riesgos_enabled
+                    )
+                riesgos_value = st.text_area(
+                    "Valor",
+                    value=st.session_state.workitem_data.get(field_name, ''),
                     height=100,
                     placeholder="Riesgos identificados...",
+                    key=f"value_{field_name}",
+                    label_visibility="collapsed",
+                    disabled=not riesgos_enabled
                 )
 
-            with col_right:
-                team = st.text_input(
-                    "Team",
-                    value=st.session_state.workitem_data.get('team', ''),
-                    placeholder="Equipo responsable"
-                )
+            updated_mappings[field_name] = {
+                "azure_field": riesgos_azure_field,
+                "enabled": riesgos_enabled
+            }
+            field_values[field_name] = riesgos_value if riesgos_enabled else ""
 
-                source = st.text_input(
-                    "Source",
-                    value=st.session_state.workitem_data.get('source', ''),
-                    placeholder="Origen de la tarea"
-                )
+            # Team
+            field_name = 'team'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "", "enabled": False})
 
-                value_area = st.selectbox(
-                    "Value Area",
-                    options=["Business", "Architectural", "Design", "Development"],
-                    index=["Business", "Architectural", "Design", "Development"].index(
-                        st.session_state.workitem_data.get('value_area', 'Business')
-                    ),
-                    help="Área de valor del work item"
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                team_enabled = st.checkbox(
+                    "",
+                    value=mapping.get('enabled', False),
+                    key=f"enable_{field_name}"
                 )
+            with col_content:
+                col_label, col_azure, col_value = st.columns([2, 3, 5])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}**")
+                with col_azure:
+                    team_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'Custom.Team'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="Custom.Team",
+                        disabled=not team_enabled
+                    )
+                with col_value:
+                    team_value = st.text_input(
+                        "Valor",
+                        value=st.session_state.workitem_data.get(field_name, ''),
+                        placeholder="Equipo responsable",
+                        key=f"value_{field_name}",
+                        label_visibility="collapsed",
+                        disabled=not team_enabled
+                    )
+
+            updated_mappings[field_name] = {
+                "azure_field": team_azure_field,
+                "enabled": team_enabled
+            }
+            field_values[field_name] = team_value if team_enabled else ""
+
+            # Source
+            field_name = 'source'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "", "enabled": False})
+
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                source_enabled = st.checkbox(
+                    "",
+                    value=mapping.get('enabled', False),
+                    key=f"enable_{field_name}"
+                )
+            with col_content:
+                col_label, col_azure, col_value = st.columns([2, 3, 5])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}**")
+                with col_azure:
+                    source_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'Custom.Source'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="Custom.Source",
+                        disabled=not source_enabled
+                    )
+                with col_value:
+                    source_value = st.text_input(
+                        "Valor",
+                        value=st.session_state.workitem_data.get(field_name, ''),
+                        placeholder="Origen de la tarea",
+                        key=f"value_{field_name}",
+                        label_visibility="collapsed",
+                        disabled=not source_enabled
+                    )
+
+            updated_mappings[field_name] = {
+                "azure_field": source_azure_field,
+                "enabled": source_enabled
+            }
+            field_values[field_name] = source_value if source_enabled else ""
+
+            # Value Area
+            field_name = 'value_area'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "", "enabled": False})
+
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                va_enabled = st.checkbox(
+                    "",
+                    value=mapping.get('enabled', False),
+                    key=f"enable_{field_name}"
+                )
+            with col_content:
+                col_label, col_azure, col_value = st.columns([2, 3, 5])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}**")
+                with col_azure:
+                    va_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'Microsoft.VSTS.Common.ValueArea'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="Microsoft.VSTS.Common.ValueArea",
+                        disabled=not va_enabled
+                    )
+                with col_value:
+                    current_value = st.session_state.workitem_data.get(field_name, 'Business')
+                    try:
+                        current_index = ["Business", "Architectural", "Design", "Development"].index(current_value)
+                    except ValueError:
+                        current_index = 0
+
+                    va_value = st.selectbox(
+                        "Valor",
+                        options=["Business", "Architectural", "Design", "Development"],
+                        index=current_index,
+                        key=f"value_{field_name}",
+                        label_visibility="collapsed",
+                        disabled=not va_enabled
+                    )
+
+            updated_mappings[field_name] = {
+                "azure_field": va_azure_field,
+                "enabled": va_enabled
+            }
+            field_values[field_name] = va_value if va_enabled else ""
+
+            # Actualizar los mappings en session_state
+            st.session_state.current_field_mappings = updated_mappings
 
             # === PASO 3: CREAR EN AZURE DEVOPS ===
             st.markdown("---")
@@ -2961,23 +3288,14 @@ REGLAS CRÍTICAS:
             col_btn, col_reset = st.columns([3, 1])
 
             with col_btn:
-                if st.button("🚀 Crear Work Item en Azure DevOps", type="primary", use_container_width=True):
+                if st.button("🚀 Crear Work Item en Azure DevOps", type="primary", use_container_width=True, key="workitem_crear_btn"):
                     # Validar campos obligatorios
-                    if not titulo or not descripcion:
+                    if not field_values['titulo'] or not field_values['descripcion']:
                         st.error("❌ El Título y la Descripción son obligatorios")
                     else:
                         with st.spinner("📤 Creando work item en Azure DevOps..."):
-                            # Preparar campos
-                            campos = {
-                                'titulo': titulo,
-                                'descripcion': descripcion,
-                                'acceptance_criteria': acceptance_criteria,
-                                'dependencies': dependencies,
-                                'riesgos': riesgos,
-                                'team': team,
-                                'source': source,
-                                'value_area': value_area
-                            }
+                            # Preparar campos con todos los valores
+                            campos = field_values.copy()
 
                             # Agregar area e iteration si se especificaron
                             if area_path:
@@ -2985,13 +3303,14 @@ REGLAS CRÍTICAS:
                             if iteration_path:
                                 campos['iteration_path'] = iteration_path
 
-                            # Crear el work item
+                            # Crear el work item con field_mappings
                             result = crear_workitem_devops(
                                 st.session_state.devops_org,
                                 st.session_state.devops_project,
                                 st.session_state.devops_pat,
                                 work_item_type,
-                                campos
+                                campos,
+                                st.session_state.current_field_mappings
                             )
 
                             if result['success']:
@@ -3003,13 +3322,17 @@ REGLAS CRÍTICAS:
                                 # Limpiar datos
                                 st.session_state.workitem_generated = False
                                 st.session_state.workitem_data = {}
+                                st.session_state.custom_prompt_workitem = ""
+                                st.session_state.current_field_mappings = {}
                             else:
                                 st.error(f"❌ Error al crear work item: {result['error']}")
 
             with col_reset:
-                if st.button("🔄 Limpiar", use_container_width=True):
+                if st.button("🔄 Limpiar", use_container_width=True, key="workitem_limpiar_btn"):
                     st.session_state.workitem_generated = False
                     st.session_state.workitem_data = {}
+                    st.session_state.custom_prompt_workitem = ""
+                    st.session_state.current_field_mappings = {}
                     st.rerun()
 
     # ================= TAB 3: ANÁLISIS DOCUMENTOS =================
