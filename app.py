@@ -2725,6 +2725,8 @@ with tab_devops:
                 st.session_state.custom_prompt_workitem = ""
             if 'current_field_mappings' not in st.session_state:
                 st.session_state.current_field_mappings = {}
+            if 'previous_workitem_type' not in st.session_state:
+                st.session_state.previous_workitem_type = "User Story"
 
             # === PASO 1: GENERAR CON IA (OPCIONAL) ===
             with st.expander("🤖 Paso 1 (Opcional): Generar campos con IA", expanded=not st.session_state.workitem_generated):
@@ -2899,12 +2901,32 @@ REGLAS CRÍTICAS:
                     key="workitem_type_selector"
                 )
 
-            # Cargar field mappings basados en el tipo seleccionado
-            if work_item_type in WORKITEM_FIELD_MAPPING:
-                st.session_state.current_field_mappings = WORKITEM_FIELD_MAPPING[work_item_type].copy()
-            else:
-                # Fallback a User Story si no existe el tipo
-                st.session_state.current_field_mappings = WORKITEM_FIELD_MAPPING["User Story"].copy()
+            # Detectar cambio de tipo de tarea y actualizar mappings
+            if work_item_type != st.session_state.previous_workitem_type:
+                # El tipo cambió, necesitamos recargar los mappings
+                st.session_state.previous_workitem_type = work_item_type
+
+                # Forzar recarga de mappings desde el diccionario base
+                if work_item_type in WORKITEM_FIELD_MAPPING:
+                    # Hacer una copia profunda para no modificar el original
+                    import copy
+                    st.session_state.current_field_mappings = copy.deepcopy(WORKITEM_FIELD_MAPPING[work_item_type])
+                else:
+                    # Fallback a User Story si no existe el tipo
+                    import copy
+                    st.session_state.current_field_mappings = copy.deepcopy(WORKITEM_FIELD_MAPPING["User Story"])
+
+                # Forzar actualización de la UI
+                st.rerun()
+
+            # Cargar field mappings si están vacíos (primera vez)
+            if not st.session_state.current_field_mappings:
+                if work_item_type in WORKITEM_FIELD_MAPPING:
+                    import copy
+                    st.session_state.current_field_mappings = copy.deepcopy(WORKITEM_FIELD_MAPPING[work_item_type])
+                else:
+                    import copy
+                    st.session_state.current_field_mappings = copy.deepcopy(WORKITEM_FIELD_MAPPING["User Story"])
 
             with col_area:
                 area_path = st.text_input(
