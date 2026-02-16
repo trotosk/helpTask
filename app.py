@@ -2752,30 +2752,82 @@ with tab_devops:
                         try:
                             # Obtener plantilla y hacer el prompt
                             template = get_template(template_choice)
-                            prompt = template.format(input=descripcion_ia)
+                            prompt_base = template.format(input=descripcion_ia)
+
+                            # Agregar instrucciones JSON al final para TODAS las plantillas
+                            json_instructions = """
+
+IMPORTANTE: Además de todo lo anterior, debes devolver AL FINAL de tu respuesta un bloque JSON válido con la siguiente estructura EXACTA:
+
+```json
+{
+    "titulo": "Título conciso y claro del work item",
+    "descripcion": "Descripción detallada en formato HTML. Incluye TODA la información generada anteriormente (tablas, casos de uso, etc.) convertida a HTML usando <div>, <p>, <ul>, <li>, <ol>, <strong>, <table>, <tr>, <td>, etc.",
+    "acceptance_criteria": "Criterios de aceptación en formato HTML. Si generaste una tabla de criterios, conviértela a HTML.",
+    "dependencies": "Dependencias identificadas en formato HTML. Si generaste una tabla de dependencias, conviértela a HTML. Si no hay, cadena vacía.",
+    "riesgos": "Riesgos potenciales en formato HTML. Si generaste una tabla de riesgos, conviértela a HTML. Si no hay, cadena vacía.",
+    "team": "Equipo responsable sugerido (si aplica, sino vacío)",
+    "source": "Origen de la tarea (si aplica, sino vacío)",
+    "value_area": "Una de estas opciones: Business, Architectural, Design, Development"
+}
+```
+
+REGLAS CRÍTICAS:
+1. El JSON debe estar AL FINAL de tu respuesta completa
+2. Toda la información detallada (tablas, criterios, casos de uso, etc.) debe ir en los campos HTML del JSON
+3. Usa formato HTML válido en descripcion, acceptance_criteria, dependencies y riesgos
+4. El JSON debe ser parseable y válido
+5. Si no hay información para un campo opcional, usa cadena vacía ""
+"""
+
+                            # Combinar prompt base con instrucciones JSON
+                            prompt = prompt_base + json_instructions
 
                             payload = {
                                 "model": st.session_state.model,
                                 "messages": [
-                                    {"role": "system", "content": "Eres un experto Product Owner. Devuelve SOLO JSON válido sin texto adicional."},
+                                    {"role": "system", "content": "Eres un experto Product Owner. Genera una respuesta detallada según la plantilla, y AL FINAL incluye un JSON válido con los campos estructurados."},
                                     {"role": "user", "content": prompt}
                                 ]
                             }
 
                             response = call_ia(payload)
 
-                            # Intentar parsear el JSON
-                            # La IA puede devolver el JSON con markdown, así que lo limpiamos
-                            response_clean = response.strip()
-                            if response_clean.startswith("```json"):
-                                response_clean = response_clean[7:]
-                            if response_clean.startswith("```"):
-                                response_clean = response_clean[3:]
-                            if response_clean.endswith("```"):
-                                response_clean = response_clean[:-3]
-                            response_clean = response_clean.strip()
+                            # Extraer el JSON de la respuesta
+                            # La respuesta puede tener texto antes del JSON, así que buscamos el bloque JSON
+                            response_text = response.strip()
 
-                            data = json.loads(response_clean)
+                            # Buscar el último bloque JSON en la respuesta
+                            json_str = None
+
+                            # Intentar encontrar JSON entre ```json y ```
+                            if "```json" in response_text:
+                                json_start = response_text.rfind("```json") + 7
+                                json_end = response_text.find("```", json_start)
+                                if json_end != -1:
+                                    json_str = response_text[json_start:json_end].strip()
+
+                            # Si no se encontró con markdown, buscar entre llaves
+                            if not json_str:
+                                # Buscar la última apertura de llave
+                                last_open = response_text.rfind("{")
+                                if last_open != -1:
+                                    # Buscar el cierre correspondiente
+                                    brace_count = 0
+                                    for i in range(last_open, len(response_text)):
+                                        if response_text[i] == "{":
+                                            brace_count += 1
+                                        elif response_text[i] == "}":
+                                            brace_count -= 1
+                                            if brace_count == 0:
+                                                json_str = response_text[last_open:i+1]
+                                                break
+
+                            if not json_str:
+                                raise ValueError("No se encontró un bloque JSON válido en la respuesta")
+
+                            # Parsear el JSON
+                            data = json.loads(json_str)
 
                             # Guardar en session_state
                             st.session_state.workitem_data = {
@@ -2793,10 +2845,20 @@ with tab_devops:
                             st.rerun()
 
                         except json.JSONDecodeError as e:
-                            st.error(f"❌ Error al parsear la respuesta de la IA: {str(e)}")
-                            st.code(response[:500])
+                            st.error(f"❌ Error al parsear el JSON: {str(e)}")
+                            with st.expander("Ver respuesta de la IA"):
+                                st.code(response)
+                            st.info("💡 Intenta usar una descripción más específica o prueba con otra plantilla")
+                        except ValueError as e:
+                            st.error(f"❌ {str(e)}")
+                            with st.expander("Ver respuesta de la IA"):
+                                st.code(response)
+                            st.info("💡 La IA no devolvió un JSON válido. Intenta con una descripción más clara")
                         except Exception as e:
                             st.error(f"❌ Error al generar campos: {str(e)}")
+                            if 'response' in locals():
+                                with st.expander("Ver respuesta de la IA"):
+                                    st.code(response)
 
             # === PASO 2: COMPLETAR/EDITAR CAMPOS ===
             st.markdown("---")
