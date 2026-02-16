@@ -80,9 +80,39 @@ def get_historia_epica_template():
 def get_resumen_reunion_template():
     return """
     Eres un experto Product owner experto de una aplicación informatica.
-    Realizas tareas de analisis y definicion para un cliente muy grande. 
+    Realizas tareas de analisis y definicion para un cliente muy grande.
     Haces mucha reuniones y necesitas sacar el resumen de la reunion, con participantes, resumen con puntos mas importantes y un resumen de cada punto, asi como las epicas que pueden crearse de lo que se hable.
     El detalle de la reunion y la transcripcion es: {input}
+    """
+
+def get_crear_workitem_template():
+    return """
+    Eres un experto Product Owner de una aplicación informática.
+    Realizas tareas de análisis y definición para un cliente muy grande.
+
+    Basándote en la siguiente descripción, genera un work item completo con TODOS los campos solicitados.
+
+    IMPORTANTE: Debes devolver un JSON válido con la siguiente estructura EXACTA:
+    {{
+        "titulo": "Título conciso y claro del work item",
+        "descripcion": "Descripción detallada en formato HTML con los puntos principales",
+        "acceptance_criteria": "Criterios de aceptación en formato HTML con lista numerada",
+        "dependencies": "Dependencias identificadas (si no hay, devuelve cadena vacía)",
+        "riesgos": "Riesgos potenciales (si no hay, devuelve cadena vacía)",
+        "team": "Equipo responsable sugerido",
+        "source": "Origen de la tarea",
+        "value_area": "Una de estas opciones: Architectural, Business, Design, Development"
+    }}
+
+    REGLAS:
+    - El JSON debe ser válido y parseable
+    - Usa formato HTML para campos de descripción y criterios (usa <div>, <p>, <ul>, <li>, <strong>)
+    - Sé específico y detallado
+    - Si no hay información para un campo, devuelve cadena vacía ""
+    - NO agregues texto adicional fuera del JSON
+
+    Descripción de la tarea:
+    {input}
     """
 
 
