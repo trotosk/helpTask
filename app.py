@@ -2814,6 +2814,11 @@ REGLAS CRÍTICAS:
                             # Usar el prompt personalizado o el generado
                             prompt_to_use = st.session_state.custom_prompt_workitem if st.session_state.custom_prompt_workitem else full_prompt
 
+                            # Verificar que el modelo esté configurado
+                            if 'model' not in st.session_state:
+                                st.error("❌ No hay modelo configurado. Por favor configura el modelo en el sidebar.")
+                                st.stop()
+
                             payload = {
                                 "model": st.session_state.model,
                                 "messages": [
@@ -2822,7 +2827,13 @@ REGLAS CRÍTICAS:
                                 ]
                             }
 
+                            # Debug: mostrar payload
+                            st.info(f"🔍 Enviando petición a la IA con modelo: {st.session_state.model}")
+
                             response = call_ia(payload)
+
+                            # Debug: mostrar que se recibió respuesta
+                            st.info(f"✅ Respuesta recibida ({len(response)} caracteres)")
 
                             # Extraer el JSON de la respuesta
                             response_text = response.strip()
@@ -2834,6 +2845,7 @@ REGLAS CRÍTICAS:
                                 json_end = response_text.find("```", json_start)
                                 if json_end != -1:
                                     json_str = response_text[json_start:json_end].strip()
+                                    st.info("🔍 JSON encontrado en formato markdown")
 
                             # Si no se encontró con markdown, buscar entre llaves
                             if not json_str:
@@ -2847,13 +2859,18 @@ REGLAS CRÍTICAS:
                                             brace_count -= 1
                                             if brace_count == 0:
                                                 json_str = response_text[last_open:i+1]
+                                                st.info("🔍 JSON encontrado entre llaves")
                                                 break
 
                             if not json_str:
+                                st.error("❌ No se encontró un bloque JSON válido en la respuesta")
+                                with st.expander("🔍 Ver respuesta completa de la IA"):
+                                    st.code(response_text)
                                 raise ValueError("No se encontró un bloque JSON válido en la respuesta")
 
                             # Parsear el JSON
                             data = json.loads(json_str)
+                            st.info("✅ JSON parseado correctamente")
 
                             # Guardar en session_state
                             st.session_state.workitem_data = {
@@ -2872,16 +2889,20 @@ REGLAS CRÍTICAS:
 
                         except json.JSONDecodeError as e:
                             st.error(f"❌ Error al parsear el JSON: {str(e)}")
-                            with st.expander("Ver respuesta de la IA"):
-                                st.code(response)
+                            if 'response' in locals():
+                                with st.expander("Ver respuesta de la IA"):
+                                    st.code(response)
                             st.info("💡 Intenta usar una descripción más específica o prueba con otra plantilla")
                         except ValueError as e:
                             st.error(f"❌ {str(e)}")
-                            with st.expander("Ver respuesta de la IA"):
-                                st.code(response)
+                            if 'response' in locals():
+                                with st.expander("Ver respuesta de la IA"):
+                                    st.code(response)
                             st.info("💡 La IA no devolvió un JSON válido. Intenta con una descripción más clara")
                         except Exception as e:
-                            st.error(f"❌ Error al generar campos: {str(e)}")
+                            st.error(f"❌ Error inesperado: {type(e).__name__}: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
                             if 'response' in locals():
                                 with st.expander("Ver respuesta de la IA"):
                                     st.code(response)
