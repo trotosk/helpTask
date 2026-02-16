@@ -2999,11 +2999,12 @@ REGLAS CRÍTICAS:
             col_check, col_content = st.columns([0.5, 10])
             with col_check:
                 titulo_enabled = st.checkbox(
-                    "",
+                    "Habilitar",
                     value=mapping.get('enabled', True),
                     key=f"enable_{field_name}",
                     help="Este campo es obligatorio",
-                    disabled=True  # Título siempre habilitado
+                    disabled=True,  # Título siempre habilitado
+                    label_visibility="collapsed"
                 )
             with col_content:
                 col_label, col_azure, col_value = st.columns([2, 3, 5])
@@ -3039,11 +3040,12 @@ REGLAS CRÍTICAS:
             col_check, col_content = st.columns([0.5, 10])
             with col_check:
                 descripcion_enabled = st.checkbox(
-                    "",
+                    "Habilitar",
                     value=mapping.get('enabled', True),
                     key=f"enable_{field_name}",
                     help="Este campo es obligatorio",
-                    disabled=True  # Descripción siempre habilitada
+                    disabled=True,  # Descripción siempre habilitada
+                    label_visibility="collapsed"
                 )
             with col_content:
                 col_label, col_azure = st.columns([2, 8])
@@ -3082,9 +3084,10 @@ REGLAS CRÍTICAS:
             col_check, col_content = st.columns([0.5, 10])
             with col_check:
                 ac_enabled = st.checkbox(
-                    "",
+                    "Habilitar",
                     value=mapping.get('enabled', False),
-                    key=f"enable_{field_name}"
+                    key=f"enable_{field_name}",
+                    label_visibility="collapsed"
                 )
             with col_content:
                 col_label, col_azure = st.columns([2, 8])
@@ -3122,9 +3125,10 @@ REGLAS CRÍTICAS:
             col_check, col_content = st.columns([0.5, 10])
             with col_check:
                 dep_enabled = st.checkbox(
-                    "",
+                    "Habilitar",
                     value=mapping.get('enabled', False),
-                    key=f"enable_{field_name}"
+                    key=f"enable_{field_name}",
+                    label_visibility="collapsed"
                 )
             with col_content:
                 col_label, col_azure = st.columns([2, 8])
@@ -3162,9 +3166,10 @@ REGLAS CRÍTICAS:
             col_check, col_content = st.columns([0.5, 10])
             with col_check:
                 riesgos_enabled = st.checkbox(
-                    "",
+                    "Habilitar",
                     value=mapping.get('enabled', False),
-                    key=f"enable_{field_name}"
+                    key=f"enable_{field_name}",
+                    label_visibility="collapsed"
                 )
             with col_content:
                 col_label, col_azure = st.columns([2, 8])
@@ -3202,9 +3207,10 @@ REGLAS CRÍTICAS:
             col_check, col_content = st.columns([0.5, 10])
             with col_check:
                 team_enabled = st.checkbox(
-                    "",
+                    "Habilitar",
                     value=mapping.get('enabled', False),
-                    key=f"enable_{field_name}"
+                    key=f"enable_{field_name}",
+                    label_visibility="collapsed"
                 )
             with col_content:
                 col_label, col_azure, col_value = st.columns([2, 3, 5])
@@ -3242,9 +3248,10 @@ REGLAS CRÍTICAS:
             col_check, col_content = st.columns([0.5, 10])
             with col_check:
                 source_enabled = st.checkbox(
-                    "",
+                    "Habilitar",
                     value=mapping.get('enabled', False),
-                    key=f"enable_{field_name}"
+                    key=f"enable_{field_name}",
+                    label_visibility="collapsed"
                 )
             with col_content:
                 col_label, col_azure, col_value = st.columns([2, 3, 5])
@@ -3282,9 +3289,10 @@ REGLAS CRÍTICAS:
             col_check, col_content = st.columns([0.5, 10])
             with col_check:
                 va_enabled = st.checkbox(
-                    "",
+                    "Habilitar",
                     value=mapping.get('enabled', False),
-                    key=f"enable_{field_name}"
+                    key=f"enable_{field_name}",
+                    label_visibility="collapsed"
                 )
             with col_content:
                 col_label, col_azure, col_value = st.columns([2, 3, 5])
