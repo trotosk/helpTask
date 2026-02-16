@@ -53,7 +53,8 @@ from templates import (
     get_spike_template,
     get_historia_epica_template,
     get_resumen_reunion_template,
-    get_criterios_epica_only_history_template
+    get_criterios_epica_only_history_template,
+    get_crear_workitem_template
 )
 
 st.set_page_config(
@@ -146,7 +147,8 @@ def get_template(tipo):
         "PO Definicion mejora tecnica": get_criterios_mejora_template(),
         "PO Definicion spike": get_spike_template(),
         "PO Definicion historia": get_historia_epica_template(),
-        "PO resumen reunion": get_resumen_reunion_template()
+        "PO resumen reunion": get_resumen_reunion_template(),
+        "PO Crear Work Item": get_crear_workitem_template()
     }.get(tipo, get_general_template())
 
 def resumir_conversacion(messages):
@@ -341,6 +343,157 @@ def descargar_attachment_devops(attachment_url, pat):
     except Exception as e:
         st.error(f"Error al descargar attachment: {str(e)}")
         return None
+
+def crear_workitem_devops(organization, project, pat, work_item_type, campos):
+    """
+    Crea un work item en Azure DevOps
+
+    Args:
+        organization: Organización de Azure DevOps
+        project: Proyecto de Azure DevOps
+        pat: Personal Access Token
+        work_item_type: Tipo de work item (Bug, User Story, Task, Feature, Epic)
+        campos: Diccionario con los campos del work item
+            - titulo (requerido)
+            - descripcion (requerido)
+            - acceptance_criteria (opcional)
+            - dependencies (opcional)
+            - riesgos (opcional)
+            - team (opcional)
+            - source (opcional)
+            - value_area (opcional): Architectural, Business, Design, Development
+            - area_path (opcional)
+            - iteration_path (opcional)
+
+    Returns:
+        Diccionario con 'success', 'id', 'url', 'error'
+    """
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/workitems/${work_item_type}?api-version=7.1"
+
+    # Encoding del PAT
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json-patch+json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    # Construir el body en formato JSON Patch
+    # Azure DevOps requiere un array de operaciones de tipo "add"
+    body = []
+
+    # Campos obligatorios
+    if campos.get('titulo'):
+        body.append({
+            "op": "add",
+            "path": "/fields/System.Title",
+            "value": campos['titulo']
+        })
+
+    if campos.get('descripcion'):
+        body.append({
+            "op": "add",
+            "path": "/fields/System.Description",
+            "value": campos['descripcion']
+        })
+
+    # Campos opcionales
+    if campos.get('acceptance_criteria'):
+        body.append({
+            "op": "add",
+            "path": "/fields/Microsoft.VSTS.Common.AcceptanceCriteria",
+            "value": campos['acceptance_criteria']
+        })
+
+    if campos.get('area_path'):
+        body.append({
+            "op": "add",
+            "path": "/fields/System.AreaPath",
+            "value": campos['area_path']
+        })
+
+    if campos.get('iteration_path'):
+        body.append({
+            "op": "add",
+            "path": "/fields/System.IterationPath",
+            "value": campos['iteration_path']
+        })
+
+    if campos.get('value_area'):
+        # Value Area: Architectural, Business, Design, Development
+        body.append({
+            "op": "add",
+            "path": "/fields/Microsoft.VSTS.Common.ValueArea",
+            "value": campos['value_area']
+        })
+
+    # Campos personalizados (pueden variar según configuración del proyecto)
+    if campos.get('dependencies'):
+        body.append({
+            "op": "add",
+            "path": "/fields/Custom.Dependencies",
+            "value": campos['dependencies']
+        })
+
+    if campos.get('riesgos'):
+        body.append({
+            "op": "add",
+            "path": "/fields/Custom.Riesgos",
+            "value": campos['riesgos']
+        })
+
+    if campos.get('team'):
+        body.append({
+            "op": "add",
+            "path": "/fields/Custom.Team",
+            "value": campos['team']
+        })
+
+    if campos.get('source'):
+        body.append({
+            "op": "add",
+            "path": "/fields/Custom.Source",
+            "value": campos['source']
+        })
+
+    try:
+        response = requests.post(url, json=body, headers=headers, timeout=30)
+
+        if response.status_code == 200 or response.status_code == 201:
+            data = response.json()
+            work_item_id = data.get('id')
+            work_item_url = f"https://dev.azure.com/{organization}/{project}/_workitems/edit/{work_item_id}"
+
+            return {
+                'success': True,
+                'id': work_item_id,
+                'url': work_item_url,
+                'error': None
+            }
+        else:
+            error_msg = f"Error HTTP {response.status_code}"
+            try:
+                error_data = response.json()
+                if 'message' in error_data:
+                    error_msg += f": {error_data['message']}"
+            except:
+                error_msg += f": {response.text[:200]}"
+
+            return {
+                'success': False,
+                'id': None,
+                'url': None,
+                'error': error_msg
+            }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'id': None,
+            'url': None,
+            'error': str(e)
+        }
 
 def limpiar_html(texto):
     """Limpia tags HTML básicos del texto"""
@@ -1461,7 +1614,7 @@ else:
 # ==================================================
 tab_chat, tab_devops, tab_doc = st.tabs([
     "💬 Chat clásico",
-    "🎯 Consulta Tareas DevOps",
+    "🎯 Tareas Azure DevOps",
     "📄 Análisis Documentos"
 ])
 
@@ -1503,10 +1656,11 @@ with tab_devops:
     st.markdown("---")
 
     # Crear subtabs
-    subtab_workitems, subtab_wiki, subtab_crear_wiki = st.tabs([
+    subtab_workitems, subtab_wiki, subtab_crear_wiki, subtab_crear_tarea = st.tabs([
         "📋 Consulta Work Items",
         "📚 Consulta Wiki",
-        "🔨 Crear Wiki desde Documento"
+        "🔨 Crear Wiki desde Documento",
+        "➕ Crear Tarea"
     ])
 
     # ================= SUBTAB 1: CONSULTA WORK ITEMS =================
@@ -2549,7 +2703,253 @@ with tab_devops:
                             if 'wiki_estructura_existente' in st.session_state:
                                 del st.session_state.wiki_estructura_existente
                             st.rerun()
-    
+
+    # ================= SUBTAB 4: CREAR TAREA =================
+    with subtab_crear_tarea:
+        st.subheader("➕ Crear Tarea en Azure DevOps")
+        st.markdown("Crea work items automáticamente usando IA o manualmente")
+
+        # Verificar configuración de Azure DevOps
+        if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
+            st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
+        else:
+            # Inicializar variables de sesión para esta funcionalidad
+            if 'workitem_generated' not in st.session_state:
+                st.session_state.workitem_generated = False
+            if 'workitem_data' not in st.session_state:
+                st.session_state.workitem_data = {}
+
+            # === PASO 1: GENERAR CON IA (OPCIONAL) ===
+            with st.expander("🤖 Paso 1 (Opcional): Generar campos con IA", expanded=not st.session_state.workitem_generated):
+                st.markdown("**Describe la tarea que quieres crear y la IA completará todos los campos automáticamente**")
+
+                col_plantilla, col_desc = st.columns([1, 2])
+
+                with col_plantilla:
+                    template_choice = st.selectbox(
+                        "Plantilla de contexto",
+                        options=[
+                            "PO Crear Work Item",
+                            "PO Definicion historia",
+                            "PO Definicion epica",
+                            "PO Definicion mejora tecnica",
+                            "PO Definicion spike",
+                            "Libre"
+                        ],
+                        help="Selecciona una plantilla para guiar a la IA"
+                    )
+
+                with col_desc:
+                    descripcion_ia = st.text_area(
+                        "Descripción de la tarea",
+                        height=150,
+                        placeholder="Ejemplo: Crear una funcionalidad para exportar reportes en PDF...",
+                        help="Describe lo que quieres que haga la tarea"
+                    )
+
+                if st.button("🎯 Generar campos con IA", disabled=not descripcion_ia):
+                    with st.spinner("🧠 Frida está generando los campos de la tarea..."):
+                        try:
+                            # Obtener plantilla y hacer el prompt
+                            template = get_template(template_choice)
+                            prompt = template.format(input=descripcion_ia)
+
+                            payload = {
+                                "model": st.session_state.model,
+                                "messages": [
+                                    {"role": "system", "content": "Eres un experto Product Owner. Devuelve SOLO JSON válido sin texto adicional."},
+                                    {"role": "user", "content": prompt}
+                                ]
+                            }
+
+                            response = call_ia(payload)
+
+                            # Intentar parsear el JSON
+                            # La IA puede devolver el JSON con markdown, así que lo limpiamos
+                            response_clean = response.strip()
+                            if response_clean.startswith("```json"):
+                                response_clean = response_clean[7:]
+                            if response_clean.startswith("```"):
+                                response_clean = response_clean[3:]
+                            if response_clean.endswith("```"):
+                                response_clean = response_clean[:-3]
+                            response_clean = response_clean.strip()
+
+                            data = json.loads(response_clean)
+
+                            # Guardar en session_state
+                            st.session_state.workitem_data = {
+                                'titulo': data.get('titulo', ''),
+                                'descripcion': data.get('descripcion', ''),
+                                'acceptance_criteria': data.get('acceptance_criteria', ''),
+                                'dependencies': data.get('dependencies', ''),
+                                'riesgos': data.get('riesgos', ''),
+                                'team': data.get('team', ''),
+                                'source': data.get('source', ''),
+                                'value_area': data.get('value_area', 'Business')
+                            }
+                            st.session_state.workitem_generated = True
+                            st.success("✅ Campos generados correctamente. Revísalos abajo y modifícalos si es necesario.")
+                            st.rerun()
+
+                        except json.JSONDecodeError as e:
+                            st.error(f"❌ Error al parsear la respuesta de la IA: {str(e)}")
+                            st.code(response[:500])
+                        except Exception as e:
+                            st.error(f"❌ Error al generar campos: {str(e)}")
+
+            # === PASO 2: COMPLETAR/EDITAR CAMPOS ===
+            st.markdown("---")
+            st.markdown("### 📝 Paso 2: Completar o editar campos")
+
+            # Columnas para organizar el formulario
+            col_tipo, col_area, col_iteration = st.columns(3)
+
+            with col_tipo:
+                work_item_type = st.selectbox(
+                    "Tipo de tarea *",
+                    options=["User Story", "Bug", "Task", "Feature", "Epic"],
+                    help="Tipo de work item a crear"
+                )
+
+            with col_area:
+                area_path = st.text_input(
+                    "Área (Area Path)",
+                    value="",
+                    placeholder="Ejemplo: Sales\\MySaga POC",
+                    help="Área del proyecto. Deja vacío para usar la raíz del proyecto"
+                )
+
+            with col_iteration:
+                iteration_path = st.text_input(
+                    "Iteración (Iteration Path)",
+                    value="",
+                    placeholder="Ejemplo: Sprint 1",
+                    help="Iteración/Sprint. Deja vacío para la iteración por defecto"
+                )
+
+            # Campos obligatorios
+            titulo = st.text_input(
+                "Título *",
+                value=st.session_state.workitem_data.get('titulo', ''),
+                placeholder="Título conciso de la tarea",
+                help="Campo obligatorio"
+            )
+
+            descripcion = st.text_area(
+                "Descripción *",
+                value=st.session_state.workitem_data.get('descripcion', ''),
+                height=150,
+                placeholder="Descripción detallada de la tarea...",
+                help="Campo obligatorio. Puede usar HTML"
+            )
+
+            # Campos opcionales
+            col_left, col_right = st.columns(2)
+
+            with col_left:
+                acceptance_criteria = st.text_area(
+                    "Criterios de Aceptación",
+                    value=st.session_state.workitem_data.get('acceptance_criteria', ''),
+                    height=150,
+                    placeholder="Criterios que deben cumplirse para considerar la tarea completa...",
+                    help="Puede usar HTML para formato"
+                )
+
+                dependencies = st.text_area(
+                    "Dependencias",
+                    value=st.session_state.workitem_data.get('dependencies', ''),
+                    height=100,
+                    placeholder="Dependencias con otras tareas o sistemas...",
+                )
+
+                riesgos = st.text_area(
+                    "Riesgos",
+                    value=st.session_state.workitem_data.get('riesgos', ''),
+                    height=100,
+                    placeholder="Riesgos identificados...",
+                )
+
+            with col_right:
+                team = st.text_input(
+                    "Team",
+                    value=st.session_state.workitem_data.get('team', ''),
+                    placeholder="Equipo responsable"
+                )
+
+                source = st.text_input(
+                    "Source",
+                    value=st.session_state.workitem_data.get('source', ''),
+                    placeholder="Origen de la tarea"
+                )
+
+                value_area = st.selectbox(
+                    "Value Area",
+                    options=["Business", "Architectural", "Design", "Development"],
+                    index=["Business", "Architectural", "Design", "Development"].index(
+                        st.session_state.workitem_data.get('value_area', 'Business')
+                    ),
+                    help="Área de valor del work item"
+                )
+
+            # === PASO 3: CREAR EN AZURE DEVOPS ===
+            st.markdown("---")
+            st.markdown("### ✅ Paso 3: Crear en Azure DevOps")
+
+            col_btn, col_reset = st.columns([3, 1])
+
+            with col_btn:
+                if st.button("🚀 Crear Work Item en Azure DevOps", type="primary", use_container_width=True):
+                    # Validar campos obligatorios
+                    if not titulo or not descripcion:
+                        st.error("❌ El Título y la Descripción son obligatorios")
+                    else:
+                        with st.spinner("📤 Creando work item en Azure DevOps..."):
+                            # Preparar campos
+                            campos = {
+                                'titulo': titulo,
+                                'descripcion': descripcion,
+                                'acceptance_criteria': acceptance_criteria,
+                                'dependencies': dependencies,
+                                'riesgos': riesgos,
+                                'team': team,
+                                'source': source,
+                                'value_area': value_area
+                            }
+
+                            # Agregar area e iteration si se especificaron
+                            if area_path:
+                                campos['area_path'] = area_path
+                            if iteration_path:
+                                campos['iteration_path'] = iteration_path
+
+                            # Crear el work item
+                            result = crear_workitem_devops(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat,
+                                work_item_type,
+                                campos
+                            )
+
+                            if result['success']:
+                                st.success(f"✅ **Work Item creado exitosamente!**")
+                                st.info(f"**ID:** {result['id']}")
+                                st.markdown(f"**URL:** [{result['url']}]({result['url']})")
+                                st.balloons()
+
+                                # Limpiar datos
+                                st.session_state.workitem_generated = False
+                                st.session_state.workitem_data = {}
+                            else:
+                                st.error(f"❌ Error al crear work item: {result['error']}")
+
+            with col_reset:
+                if st.button("🔄 Limpiar", use_container_width=True):
+                    st.session_state.workitem_generated = False
+                    st.session_state.workitem_data = {}
+                    st.rerun()
+
     # ================= TAB 3: ANÁLISIS DOCUMENTOS =================
 with tab_doc:
     st.title("📄 Análisis de Documentos")
