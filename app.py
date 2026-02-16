@@ -2805,10 +2805,18 @@ REGLAS CRÍTICAS:
                     key="workitem_custom_prompt_input"
                 )
 
-                # Guardar el prompt personalizado en session_state
-                st.session_state.custom_prompt_workitem = custom_prompt
+                # Guardar el prompt personalizado en session_state solo si cambió
+                if custom_prompt != st.session_state.custom_prompt_workitem:
+                    st.session_state.custom_prompt_workitem = custom_prompt
+
+                # Mostrar información del modelo antes del botón
+                if 'model' in st.session_state:
+                    st.info(f"📊 Modelo configurado: **{st.session_state.model}**")
+                else:
+                    st.error("❌ No hay modelo configurado. Por favor configura el modelo en el sidebar.")
 
                 if st.button("🎯 Generar campos con IA", disabled=not descripcion_ia, key="workitem_generar_ia_btn"):
+                    st.write("🔄 **Botón presionado - iniciando proceso...**")
                     with st.spinner("🧠 Frida está generando los campos de la tarea..."):
                         try:
                             # Usar el prompt personalizado o el generado
