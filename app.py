@@ -1541,7 +1541,7 @@ if st.sidebar.button("🧹 Nuevo Chat"):
     for k in defaults:
         st.session_state[k] = defaults[k]
 
-with st.sidebar.expander("⚙️ Configuración IA", expanded=True):
+with st.sidebar.expander("⚙️ Configuración IA", expanded=False):
     st.session_state.model = st.selectbox(
         "Modelo IA",
         options=[
@@ -2774,12 +2774,17 @@ with tab_devops:
                 if template_choice == "PO Definicion historia":
                     desc_field_instructions = (
                         "Descripción detallada en formato HTML con los puntos principales. "
-                        "Primero, detalla la historia con el formato: "
-                        "<strong>Título</strong>: [título]; <strong>Como</strong>: [rol]; "
-                        "<strong>Quiero</strong>: [acción]; <strong>Para</strong>: [beneficio]. "
-                        "A continuación, incluye una <strong>descripción general</strong> de la historia. "
-                        "Finalmente, muestra los <strong>casos de uso</strong> en una tabla HTML de 3 columnas "
-                        "con las cabeceras: <em>Dado</em>, <em>Cuando</em>, <em>Entonces</em>."
+                        "Quiero en este mismo campo primero detallar la historia con forma: "
+                        "titulo; Como; Quiero; Para. "
+                        "Quiero a continuacion tambien una descripcion general de la historia. "
+                        "Tambien han de mostrarse los casos de uso con el formato: dado, cuando y entonces. "
+                        "Necesito que los casos de uso, se muestren en una tabla de 3 columnas."
+                    )
+                elif template_choice == "PO Definicion epica":
+                    desc_field_instructions = (
+                        "Descripción detallada en formato HTML con los puntos principales. "
+                        "Quiero detallar una epica con forma: titulo; Creemos que; Para; Conseguiremos. "
+                        "A continuacion Quiero tambien una descripcion de la epica."
                     )
                 else:
                     desc_field_instructions = (
@@ -2816,17 +2821,14 @@ REGLAS CRÍTICAS:
 
                 full_prompt = prompt_preview + json_instructions
 
+                # Usar la plantilla como parte del key para resetear el widget al cambiar plantilla
                 custom_prompt = st.text_area(
                     "Prompt completo",
-                    value=st.session_state.custom_prompt_workitem if st.session_state.custom_prompt_workitem else full_prompt,
+                    value=full_prompt,
                     height=300,
                     help="Puedes editar este prompt antes de enviarlo a la IA",
-                    key="workitem_custom_prompt_input"
+                    key=f"workitem_custom_prompt_{template_choice}"
                 )
-
-                # Guardar el prompt personalizado en session_state solo si cambió
-                if custom_prompt != st.session_state.custom_prompt_workitem:
-                    st.session_state.custom_prompt_workitem = custom_prompt
 
                 # Mostrar información del modelo antes del botón
                 if 'model' in st.session_state:
