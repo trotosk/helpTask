@@ -207,6 +207,43 @@ def get_template(tipo):
         "PO Crear Work Item": get_crear_workitem_template()
     }.get(tipo, get_general_template())
 
+def sanitize_json_string(json_str):
+    """Fix unescaped double quotes inside JSON string values (common in AI-generated HTML content)."""
+    result = []
+    in_string = False
+    i = 0
+    n = len(json_str)
+    while i < n:
+        c = json_str[i]
+        # Escaped character: pass both chars through unchanged
+        if c == '\\' and i + 1 < n:
+            result.append(c)
+            result.append(json_str[i + 1])
+            i += 2
+            continue
+        if c == '"':
+            if not in_string:
+                in_string = True
+                result.append(c)
+            else:
+                # Look ahead past whitespace to decide if this closes the string
+                j = i + 1
+                while j < n and json_str[j] in ' \t\n\r':
+                    j += 1
+                next_c = json_str[j] if j < n else None
+                if next_c in (',', ':', '}', ']', None):
+                    # Closing quote
+                    in_string = False
+                    result.append(c)
+                else:
+                    # Unescaped quote inside string value — escape it
+                    result.append('\\')
+                    result.append(c)
+        else:
+            result.append(c)
+        i += 1
+    return ''.join(result)
+
 def resumir_conversacion(messages):
     resumen_prompt = [
         {"role": "system", "content": "Resume la conversación técnica manteniendo contexto y decisiones"},
@@ -2817,6 +2854,7 @@ REGLAS CRÍTICAS:
 3. Usa formato HTML válido en descripcion, acceptance_criteria, dependencies y riesgos
 4. El JSON debe ser parseable y válido
 5. Si no hay información para un campo opcional, usa cadena vacía ""
+6. IMPORTANTE: dentro del contenido HTML NO uses comillas dobles ("). Usa &quot; para comillas en el texto y comillas simples (') para atributos HTML
 """).replace("DESCRIPCION_PLACEHOLDER", desc_field_instructions)
 
                 full_prompt = prompt_preview + json_instructions
@@ -2840,8 +2878,8 @@ REGLAS CRÍTICAS:
                     st.write("🔄 **Botón presionado - iniciando proceso...**")
                     with st.spinner("🧠 Frida está generando los campos de la tarea..."):
                         try:
-                            # Usar el prompt personalizado o el generado
-                            prompt_to_use = st.session_state.custom_prompt_workitem if st.session_state.custom_prompt_workitem else full_prompt
+                            # Usar el prompt del text_area (siempre actualizado)
+                            prompt_to_use = custom_prompt
 
                             # Verificar que el modelo esté configurado
                             if 'model' not in st.session_state:
@@ -2897,8 +2935,12 @@ REGLAS CRÍTICAS:
                                     st.code(response_text)
                                 raise ValueError("No se encontró un bloque JSON válido en la respuesta")
 
-                            # Parsear el JSON
-                            data = json.loads(json_str)
+                            # Parsear el JSON (con fallback para comillas sin escapar en HTML)
+                            try:
+                                data = json.loads(json_str)
+                            except json.JSONDecodeError:
+                                sanitized = sanitize_json_string(json_str)
+                                data = json.loads(sanitized)
                             st.info("✅ JSON parseado correctamente")
 
                             # Guardar en session_state
