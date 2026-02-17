@@ -207,6 +207,43 @@ def get_template(tipo):
         "PO Crear Work Item": get_crear_workitem_template()
     }.get(tipo, get_general_template())
 
+def sanitize_json_string(json_str):
+    """Fix unescaped double quotes inside JSON string values (common in AI-generated HTML content)."""
+    result = []
+    in_string = False
+    i = 0
+    n = len(json_str)
+    while i < n:
+        c = json_str[i]
+        # Escaped character: pass both chars through unchanged
+        if c == '\\' and i + 1 < n:
+            result.append(c)
+            result.append(json_str[i + 1])
+            i += 2
+            continue
+        if c == '"':
+            if not in_string:
+                in_string = True
+                result.append(c)
+            else:
+                # Look ahead past whitespace to decide if this closes the string
+                j = i + 1
+                while j < n and json_str[j] in ' \t\n\r':
+                    j += 1
+                next_c = json_str[j] if j < n else None
+                if next_c in (',', ':', '}', ']', None):
+                    # Closing quote
+                    in_string = False
+                    result.append(c)
+                else:
+                    # Unescaped quote inside string value — escape it
+                    result.append('\\')
+                    result.append(c)
+        else:
+            result.append(c)
+        i += 1
+    return ''.join(result)
+
 def resumir_conversacion(messages):
     resumen_prompt = [
         {"role": "system", "content": "Resume la conversación técnica manteniendo contexto y decisiones"},
@@ -1541,7 +1578,7 @@ if st.sidebar.button("🧹 Nuevo Chat"):
     for k in defaults:
         st.session_state[k] = defaults[k]
 
-with st.sidebar.expander("⚙️ Configuración IA", expanded=True):
+with st.sidebar.expander("⚙️ Configuración IA", expanded=False):
     st.session_state.model = st.selectbox(
         "Modelo IA",
         options=[
@@ -2774,12 +2811,17 @@ with tab_devops:
                 if template_choice == "PO Definicion historia":
                     desc_field_instructions = (
                         "Descripción detallada en formato HTML con los puntos principales. "
-                        "Primero, detalla la historia con el formato: "
-                        "<strong>Título</strong>: [título]; <strong>Como</strong>: [rol]; "
-                        "<strong>Quiero</strong>: [acción]; <strong>Para</strong>: [beneficio]. "
-                        "A continuación, incluye una <strong>descripción general</strong> de la historia. "
-                        "Finalmente, muestra los <strong>casos de uso</strong> en una tabla HTML de 3 columnas "
-                        "con las cabeceras: <em>Dado</em>, <em>Cuando</em>, <em>Entonces</em>."
+                        "Quiero en este mismo campo primero detallar la historia con forma: "
+                        "titulo; Como; Quiero; Para. "
+                        "Quiero a continuacion tambien una descripcion general de la historia. "
+                        "Tambien han de mostrarse los casos de uso con el formato: dado, cuando y entonces. "
+                        "Necesito que los casos de uso, se muestren en una tabla de 3 columnas."
+                    )
+                elif template_choice == "PO Definicion epica":
+                    desc_field_instructions = (
+                        "Descripción detallada en formato HTML con los puntos principales. "
+                        "Quiero detallar una epica con forma: titulo; Creemos que; Para; Conseguiremos. "
+                        "A continuacion Quiero tambien una descripcion de la epica."
                     )
                 else:
                     desc_field_instructions = (
@@ -2812,21 +2854,19 @@ REGLAS CRÍTICAS:
 3. Usa formato HTML válido en descripcion, acceptance_criteria, dependencies y riesgos
 4. El JSON debe ser parseable y válido
 5. Si no hay información para un campo opcional, usa cadena vacía ""
+6. IMPORTANTE: dentro del contenido HTML NO uses comillas dobles ("). Usa &quot; para comillas en el texto y comillas simples (') para atributos HTML
 """).replace("DESCRIPCION_PLACEHOLDER", desc_field_instructions)
 
                 full_prompt = prompt_preview + json_instructions
 
+                # Usar la plantilla como parte del key para resetear el widget al cambiar plantilla
                 custom_prompt = st.text_area(
                     "Prompt completo",
-                    value=st.session_state.custom_prompt_workitem if st.session_state.custom_prompt_workitem else full_prompt,
+                    value=full_prompt,
                     height=300,
                     help="Puedes editar este prompt antes de enviarlo a la IA",
-                    key="workitem_custom_prompt_input"
+                    key=f"workitem_custom_prompt_{template_choice}"
                 )
-
-                # Guardar el prompt personalizado en session_state solo si cambió
-                if custom_prompt != st.session_state.custom_prompt_workitem:
-                    st.session_state.custom_prompt_workitem = custom_prompt
 
                 # Mostrar información del modelo antes del botón
                 if 'model' in st.session_state:
@@ -2838,8 +2878,8 @@ REGLAS CRÍTICAS:
                     st.write("🔄 **Botón presionado - iniciando proceso...**")
                     with st.spinner("🧠 Frida está generando los campos de la tarea..."):
                         try:
-                            # Usar el prompt personalizado o el generado
-                            prompt_to_use = st.session_state.custom_prompt_workitem if st.session_state.custom_prompt_workitem else full_prompt
+                            # Usar el prompt del text_area (siempre actualizado)
+                            prompt_to_use = custom_prompt
 
                             # Verificar que el modelo esté configurado
                             if 'model' not in st.session_state:
@@ -2895,8 +2935,12 @@ REGLAS CRÍTICAS:
                                     st.code(response_text)
                                 raise ValueError("No se encontró un bloque JSON válido en la respuesta")
 
-                            # Parsear el JSON
-                            data = json.loads(json_str)
+                            # Parsear el JSON (con fallback para comillas sin escapar en HTML)
+                            try:
+                                data = json.loads(json_str)
+                            except json.JSONDecodeError:
+                                sanitized = sanitize_json_string(json_str)
+                                data = json.loads(sanitized)
                             st.info("✅ JSON parseado correctamente")
 
                             # Guardar en session_state
