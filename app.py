@@ -1541,36 +1541,37 @@ if st.sidebar.button("🧹 Nuevo Chat"):
     for k in defaults:
         st.session_state[k] = defaults[k]
 
-st.session_state.model = st.sidebar.selectbox(
-    "Modelo IA",
-    options=[
-        "Innovation-gpt4o-mini", "Innovation-gpt4o",
-        "o4-mini", "o1", "o1-mini", "o3-mini",
-        "o1-preview", "gpt-5-chat", "gpt-4.1",
-        "gpt-4.1-mini", "gpt-5", "gpt-5-codex",
-        "gpt-5-mini", "gpt-5-nano",
-        "gpt-4.1-nano", "claude-3-5-sonnet",
-        "claude-4-sonnet", "claude-3-7-sonnet",
-        "claude-3-5-haiku", "claude-4-5-sonnet"
-    ],
-    index=0
-)
+with st.sidebar.expander("⚙️ Configuración IA", expanded=True):
+    st.session_state.model = st.selectbox(
+        "Modelo IA",
+        options=[
+            "Innovation-gpt4o-mini", "Innovation-gpt4o",
+            "o4-mini", "o1", "o1-mini", "o3-mini",
+            "o1-preview", "gpt-5-chat", "gpt-4.1",
+            "gpt-4.1-mini", "gpt-5", "gpt-5-codex",
+            "gpt-5-mini", "gpt-5-nano",
+            "gpt-4.1-nano", "claude-3-5-sonnet",
+            "claude-4-sonnet", "claude-3-7-sonnet",
+            "claude-3-5-haiku", "claude-4-5-sonnet"
+        ],
+        index=0
+    )
+    st.session_state.include_temp = st.checkbox("Incluir temperatura", value=True)
+    st.session_state.temperature = st.slider("Temperatura", 0.0, 1.0, 0.7, 0.1)
+    st.session_state.include_tokens = st.checkbox("Incluir max_tokens", value=True)
+    st.session_state.max_tokens = st.slider("Max tokens", 100, 4096, 3000, 100)
 
-st.session_state.include_temp = st.sidebar.checkbox("Incluir temperatura", value=True)
-st.session_state.temperature = st.sidebar.slider("Temperatura", 0.0, 1.0, 0.7, 0.1)
-st.session_state.include_tokens = st.sidebar.checkbox("Incluir max_tokens", value=True)
-st.session_state.max_tokens = st.sidebar.slider("Max tokens", 100, 4096, 3000, 100)
-
-template_type = st.sidebar.selectbox(
-    "Tipo de prompt inicial",
-    [
-        "Libre", "PO Casos exito", "PO Definicion epica",
-        "PO Definicion epica una historia", "PO Definicion historia",
-        "PO Definicion mejora tecnica", "PO Definicion spike",
-        "PO resumen reunion", "Programador Python"
-    ]
-)
-prompt_template = st.sidebar.text_area("Contenido del template", get_template(template_type), height=220)
+with st.sidebar.expander("📝 Config Prompt Chat", expanded=False):
+    template_type = st.selectbox(
+        "Tipo de prompt inicial",
+        [
+            "Libre", "PO Casos exito", "PO Definicion epica",
+            "PO Definicion epica una historia", "PO Definicion historia",
+            "PO Definicion mejora tecnica", "PO Definicion spike",
+            "PO resumen reunion", "Programador Python"
+        ]
+    )
+    prompt_template = st.text_area("Contenido del template", get_template(template_type), height=220)
 
 # Configuración de Azure DevOps (global)
 st.sidebar.markdown("---")
@@ -2769,15 +2770,33 @@ with tab_devops:
                 else:
                     prompt_preview = template.replace("{input}", "[Tu descripción aquí]")
 
+                # Adaptar instrucción del campo descripción según la plantilla seleccionada
+                if template_choice == "PO Definicion historia":
+                    desc_field_instructions = (
+                        "Descripción detallada en formato HTML con los puntos principales. "
+                        "Primero, detalla la historia con el formato: "
+                        "<strong>Título</strong>: [título]; <strong>Como</strong>: [rol]; "
+                        "<strong>Quiero</strong>: [acción]; <strong>Para</strong>: [beneficio]. "
+                        "A continuación, incluye una <strong>descripción general</strong> de la historia. "
+                        "Finalmente, muestra los <strong>casos de uso</strong> en una tabla HTML de 3 columnas "
+                        "con las cabeceras: <em>Dado</em>, <em>Cuando</em>, <em>Entonces</em>."
+                    )
+                else:
+                    desc_field_instructions = (
+                        "Descripción detallada en formato HTML. Incluye TODA la información generada anteriormente "
+                        "(tablas, casos de uso, etc.) convertida a HTML usando "
+                        "div, p, ul, li, ol, strong, table, tr, td, etc."
+                    )
+
                 # Agregar instrucciones JSON al final
-                json_instructions = """
+                json_instructions = ("""
 
 IMPORTANTE: Además de todo lo anterior, debes devolver AL FINAL de tu respuesta un bloque JSON válido con la siguiente estructura EXACTA:
 
 ```json
 {
     "titulo": "Título conciso y claro del work item",
-    "descripcion": "Descripción detallada en formato HTML. Incluye TODA la información generada anteriormente (tablas, casos de uso, etc.) convertida a HTML usando <div>, <p>, <ul>, <li>, <ol>, <strong>, <table>, <tr>, <td>, etc.",
+    "descripcion": "DESCRIPCION_PLACEHOLDER",
     "acceptance_criteria": "Criterios de aceptación en formato HTML. Si generaste una tabla de criterios, conviértela a HTML.",
     "dependencies": "Dependencias identificadas en formato HTML. Si generaste una tabla de dependencias, conviértela a HTML. Si no hay, cadena vacía.",
     "riesgos": "Riesgos potenciales en formato HTML. Si generaste una tabla de riesgos, conviértela a HTML. Si no hay, cadena vacía.",
@@ -2793,7 +2812,7 @@ REGLAS CRÍTICAS:
 3. Usa formato HTML válido en descripcion, acceptance_criteria, dependencies y riesgos
 4. El JSON debe ser parseable y válido
 5. Si no hay información para un campo opcional, usa cadena vacía ""
-"""
+""").replace("DESCRIPCION_PLACEHOLDER", desc_field_instructions)
 
                 full_prompt = prompt_preview + json_instructions
 
@@ -2914,6 +2933,11 @@ REGLAS CRÍTICAS:
                             if 'response' in locals():
                                 with st.expander("Ver respuesta de la IA"):
                                     st.code(response)
+
+            # Mostrar respuesta JSON de la IA (desplegable discreto)
+            if st.session_state.workitem_generated and st.session_state.workitem_data:
+                with st.expander("🔍 Ver respuesta JSON de la IA", expanded=False):
+                    st.code(json.dumps(st.session_state.workitem_data, indent=2, ensure_ascii=False), language="json")
 
             # === PASO 2: COMPLETAR/EDITAR CAMPOS ===
             st.markdown("---")
