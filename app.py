@@ -2846,7 +2846,7 @@ with tab_devops:
                     desc_field_instructions = (
                         "Descripción detallada en formato HTML con los puntos principales. "
                         "Quiero en este mismo campo primero detallar la historia con forma: "
-                        "titulo; Como; Quiero; Para. "
+                        "Como; Quiero; Para. "
                         "Quiero a continuacion tambien una descripcion general de la historia. "
                         "Tambien han de mostrarse los casos de uso con el formato: dado, cuando y entonces. "
                         "Necesito que los casos de uso, se muestren en una tabla de 3 columnas."
@@ -2854,7 +2854,7 @@ with tab_devops:
                 elif template_choice == "PO Definicion epica":
                     desc_field_instructions = (
                         "Descripción detallada en formato HTML con los puntos principales. "
-                        "Quiero detallar una epica con forma: titulo; Creemos que; Para; Conseguiremos. "
+                        "Quiero detallar una epica con forma: Creemos que; Para; Conseguiremos. "
                         "A continuacion Quiero tambien una descripcion de la epica."
                     )
                 else:
