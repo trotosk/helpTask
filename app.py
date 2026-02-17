@@ -2954,6 +2954,13 @@ REGLAS CRÍTICAS:
                                 'source': data.get('source', ''),
                                 'value_area': data.get('value_area', 'Business')
                             }
+
+                            # Actualizar también las claves de los widgets directamente,
+                            # porque Streamlit ignora el parámetro `value=` si la clave
+                            # ya existe en session_state (que es el caso en reruns).
+                            for campo in ['titulo', 'descripcion', 'acceptance_criteria',
+                                          'dependencies', 'riesgos', 'team', 'source', 'value_area']:
+                                st.session_state[f'value_{campo}'] = st.session_state.workitem_data[campo]
                             st.session_state.workitem_generated = True
                             st.success("✅ Campos generados correctamente. Revísalos abajo y modifícalos si es necesario.")
                             st.rerun()
