@@ -244,6 +244,34 @@ def sanitize_json_string(json_str):
         i += 1
     return ''.join(result)
 
+def add_table_borders_to_html(html):
+    """Añade estilos CSS inline a las tablas HTML para que se vean con bordes en Azure DevOps."""
+    if not html:
+        return html
+    # Solo actúa si hay tablas en el contenido
+    if '<table' not in html.lower():
+        return html
+    import re
+    # <table> — solo si aún no tiene style=
+    html = re.sub(
+        r'<table(?![^>]*style=)',
+        '<table style="border-collapse:collapse;width:100%;"',
+        html, flags=re.IGNORECASE
+    )
+    # <th> — cabeceras con fondo gris
+    html = re.sub(
+        r'<th(?![^>]*style=)',
+        '<th style="border:1px solid #666;padding:6px 8px;background-color:#f2f2f2;text-align:left;"',
+        html, flags=re.IGNORECASE
+    )
+    # <td> — celdas normales
+    html = re.sub(
+        r'<td(?![^>]*style=)',
+        '<td style="border:1px solid #666;padding:6px 8px;"',
+        html, flags=re.IGNORECASE
+    )
+    return html
+
 def resumir_conversacion(messages):
     resumen_prompt = [
         {"role": "system", "content": "Resume la conversación técnica manteniendo contexto y decisiones"},
@@ -468,6 +496,9 @@ def crear_workitem_devops(organization, project, pat, work_item_type, campos, fi
     # Azure DevOps requiere un array de operaciones de tipo "add"
     body = []
 
+    # Campos HTML que deben llevar bordes en las tablas
+    HTML_FIELDS = {'descripcion', 'acceptance_criteria', 'dependencies', 'riesgos'}
+
     # Recorrer todos los campos y agregar los que estén habilitados y tengan valor
     for field_name, field_value in campos.items():
         # Verificar si el campo tiene configuración en field_mappings
@@ -476,6 +507,9 @@ def crear_workitem_devops(organization, project, pat, work_item_type, campos, fi
 
             # Solo agregar si está habilitado, tiene un campo de Azure definido, y tiene valor
             if mapping.get('enabled', False) and mapping.get('azure_field') and field_value:
+                # Inyectar estilos de borde en tablas HTML antes de enviar a Azure DevOps
+                if field_name in HTML_FIELDS:
+                    field_value = add_table_borders_to_html(field_value)
                 body.append({
                     "op": "add",
                     "path": f"/fields/{mapping['azure_field']}",
