@@ -2893,13 +2893,24 @@ REGLAS CRÍTICAS:
 
                 full_prompt = prompt_preview + json_instructions
 
-                # Usar la plantilla como parte del key para resetear el widget al cambiar plantilla
+                # Detectar cambios en descripcion o plantilla para actualizar el text_area.
+                # Sin esto, Streamlit ignora el valor recalculado de full_prompt porque
+                # la clave ya existe en session_state, y la IA recibe el prompt sin el
+                # texto del usuario.
+                prompt_key = f"workitem_custom_prompt_{template_choice}"
+                prev_desc_key = "_prev_workitem_desc"
+                prev_tmpl_key = "_prev_workitem_tmpl"
+                if (st.session_state.get(prev_desc_key) != descripcion_ia or
+                        st.session_state.get(prev_tmpl_key) != template_choice):
+                    st.session_state[prompt_key] = full_prompt
+                    st.session_state[prev_desc_key] = descripcion_ia
+                    st.session_state[prev_tmpl_key] = template_choice
+
                 custom_prompt = st.text_area(
                     "Prompt completo",
-                    value=full_prompt,
                     height=300,
                     help="Puedes editar este prompt antes de enviarlo a la IA",
-                    key=f"workitem_custom_prompt_{template_choice}"
+                    key=prompt_key
                 )
 
                 # Mostrar información del modelo antes del botón
