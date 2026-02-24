@@ -3052,30 +3052,32 @@ REGLAS CRÍTICAS:
 
             # Detectar cambio de tipo de tarea y actualizar mappings
             if work_item_type != st.session_state.previous_workitem_type:
-                # El tipo cambió, necesitamos recargar los mappings
                 st.session_state.previous_workitem_type = work_item_type
 
-                # Forzar recarga de mappings desde el diccionario base
-                if work_item_type in WORKITEM_FIELD_MAPPING:
-                    # Hacer una copia profunda para no modificar el original
-                    import copy
-                    st.session_state.current_field_mappings = copy.deepcopy(WORKITEM_FIELD_MAPPING[work_item_type])
-                else:
-                    # Fallback a User Story si no existe el tipo
-                    import copy
-                    st.session_state.current_field_mappings = copy.deepcopy(WORKITEM_FIELD_MAPPING["User Story"])
+                import copy
+                new_mappings = copy.deepcopy(
+                    WORKITEM_FIELD_MAPPING.get(work_item_type, WORKITEM_FIELD_MAPPING["User Story"])
+                )
+                st.session_state.current_field_mappings = new_mappings
 
-                # Forzar actualización de la UI
+                # Actualizar las claves de los widgets de Azure field y enabled,
+                # porque Streamlit ignora value= si la clave ya existe en session_state.
+                for fname, fmap in new_mappings.items():
+                    st.session_state[f"azure_{fname}"] = fmap.get('azure_field', '')
+                    st.session_state[f"enable_{fname}"] = fmap.get('enabled', False)
+
                 st.rerun()
 
             # Cargar field mappings si están vacíos (primera vez)
             if not st.session_state.current_field_mappings:
-                if work_item_type in WORKITEM_FIELD_MAPPING:
-                    import copy
-                    st.session_state.current_field_mappings = copy.deepcopy(WORKITEM_FIELD_MAPPING[work_item_type])
-                else:
-                    import copy
-                    st.session_state.current_field_mappings = copy.deepcopy(WORKITEM_FIELD_MAPPING["User Story"])
+                import copy
+                new_mappings = copy.deepcopy(
+                    WORKITEM_FIELD_MAPPING.get(work_item_type, WORKITEM_FIELD_MAPPING["User Story"])
+                )
+                st.session_state.current_field_mappings = new_mappings
+                for fname, fmap in new_mappings.items():
+                    st.session_state[f"azure_{fname}"] = fmap.get('azure_field', '')
+                    st.session_state[f"enable_{fname}"] = fmap.get('enabled', False)
 
             with col_area:
                 area_path = st.text_input(
