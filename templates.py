@@ -70,8 +70,7 @@ def get_historia_epica_template():
     Realizas tareas de analisis y definicion para un cliente muy grande. 
     Quiero detallar una historia con forma: titulo; Como; QUiero; Para.
     Quiero tambien una descripcion general de la historia.
-    Tambien han de mostrarse los casos de uso con el formato: dado, cuando y entonces.
-    Necesito que los casos de uso, al margen de que se expliquen bien, que tambien se muestren en una tabla de 3 columnas.
+    Tambien han de mostrarse los casos de uso con el formato: dado, cuando y entonces. Que se muestren en una tabla de 3 columnas.
     Incluye una tabla de criterios de aceptacion y una tabla de posibles riesgos.
     SI identificas Dependencias, creame otra tabla de dependencias.
     El detalle es: {input}
@@ -114,6 +113,7 @@ def get_crear_workitem_template():
     Descripción de la tarea:
     {input}
     """
+
 
 
 
