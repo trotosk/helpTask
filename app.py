@@ -1148,6 +1148,23 @@ def detectar_encabezados_principales(contenido_documento):
         linea_limpia = linea.strip()
         es_encabezado = False
 
+        # === EXCLUSIONES: NO detectar como encabezado si parece código/JSON/tabla ===
+        # Excluir bloques de código Markdown
+        if linea_limpia.startswith('```') or linea_limpia.startswith('~~~'):
+            continue
+        # Excluir líneas indentadas (código)
+        if linea.startswith('    ') or linea.startswith('\t'):
+            continue
+        # Excluir sintaxis JSON/diccionarios
+        if '{' in linea_limpia or '}' in linea_limpia or linea_limpia.startswith('"') and '":' in linea_limpia:
+            continue
+        # Excluir sintaxis de programación
+        if ';' in linea_limpia or '()' in linea_limpia or ' = ' in linea_limpia or linea_limpia.endswith('('):
+            continue
+        # Excluir filas de tabla Markdown
+        if linea_limpia.startswith('|') or linea_limpia.count('|') >= 2:
+            continue
+
         # Patrón 1: Numeración de primer nivel ÚNICAMENTE (1. Título, 2. Título)
         # Excluir subsecciones como 1.1, 2.3.1, etc.
         if re.match(r'^\d+\.\s+\S', linea_limpia) and not re.match(r'^\d+\.\d', linea_limpia):
@@ -1519,7 +1536,7 @@ def mejorar_contenido_pagina_con_frida(titulo_pagina, contenido_original, contex
     """
     Usa Frida para mejorar el contenido de una página específica
     """
-    prompt_mejora = f"""Mejora el siguiente contenido para una página de Wiki en Azure DevOps.
+    prompt_mejora = f"""Formatea y mejora el siguiente contenido para una página de Wiki en Azure DevOps, optimizada para legibilidad.
 
 **Título de la página:** {titulo_pagina}
 
@@ -1529,12 +1546,24 @@ def mejorar_contenido_pagina_con_frida(titulo_pagina, contenido_original, contex
 **Contexto del documento completo (si aplica):**
 {contexto_documento[:3000] if contexto_documento else "No disponible"}
 
-**Tu tarea:**
-1. Reformula el contenido para mayor claridad
-2. Estructura la información de forma lógica usando markdown
-3. Añade ejemplos o aclaraciones donde sea útil
-4. Mantén un tono profesional pero accesible
-5. Usa listas, tablas, y formato markdown adecuadamente
+**Tu tarea — Formato específico para Azure DevOps Wiki:**
+1. **Encabezados jerárquicos**: Usa `#`, `##`, `###` para estructurar el contenido claramente
+2. **Tablas Markdown**: Formatea TODAS las tablas como Markdown válido con `|` y alineación correcta:
+   ```
+   | Columna 1 | Columna 2 | Columna 3 |
+   |-----------|-----------|-----------|
+   | Dato 1    | Dato 2    | Dato 3    |
+   ```
+3. **Listas**: Usa `-` para listas no ordenadas, `1.` para numeradas
+4. **Énfasis**: `**negrita**` para conceptos clave, `*cursiva*` para términos técnicos
+5. **Espaciado**: Añade líneas en blanco entre secciones para mejor legibilidad
+6. **Bloques de código**: Si hay código o JSON, usa bloques con ` ``` ` y el lenguaje
+7. **Claridad**: Reformula oraciones complejas, separa párrafos largos
+
+**IMPORTANTE:**
+- NO uses HTML (solo Markdown puro)
+- Tablas SIEMPRE en formato Markdown, nunca HTML
+- Mantén el contenido completo, no resumas
 
 **Devuelve solo el contenido markdown mejorado, sin explicaciones adicionales.**"""
 
@@ -2608,7 +2637,7 @@ with tab_devops:
                             st.session_state[title_key] = pagina['titulo']
 
                         with st.container():
-                            col_icon, col_titulo, col_acciones = st.columns([0.4, 5, 1])
+                            col_icon, col_titulo, col_acciones = st.columns([0.4, 4.5, 1.5])
 
                             with col_icon:
                                 st.markdown(f"{indent}{icon}")
@@ -2630,9 +2659,48 @@ with tab_devops:
                                     st.session_state.wiki_create_estructura_editada = estructura
 
                             with col_acciones:
-                                if st.button("✏️", key=f"edit_page_{idx}", help="Editar contenido"):
-                                    st.session_state[f"editing_page_{idx}"] = True
-                                    st.rerun()
+                                btn_col1, btn_col2, btn_col3 = st.columns(3)
+                                with btn_col1:
+                                    if st.button("✏️", key=f"edit_page_{idx}", help="Editar contenido"):
+                                        st.session_state[f"editing_page_{idx}"] = True
+                                        st.rerun()
+                                with btn_col2:
+                                    # Botón unir con anterior (no disponible para primera página)
+                                    if idx > 0 and st.button("⬆️", key=f"merge_page_{idx}", help="Unir con página anterior"):
+                                        # Añadir el contenido de esta página a la anterior
+                                        estructura['paginas'][idx-1]['contenido_markdown'] += f"\n\n---\n\n{pagina['contenido_markdown']}"
+                                        # Actualizar referencias de páginas hijas al padre anterior
+                                        titulo_eliminado = pagina['titulo']
+                                        titulo_anterior = estructura['paginas'][idx-1]['titulo']
+                                        for p in estructura['paginas']:
+                                            if p.get('padre') == titulo_eliminado:
+                                                p['padre'] = titulo_anterior
+                                        # Eliminar esta página
+                                        del estructura['paginas'][idx]
+                                        # Limpiar clave de título en session_state
+                                        if title_key in st.session_state:
+                                            del st.session_state[title_key]
+                                        st.session_state.wiki_create_estructura_editada = estructura
+                                        st.success(f"✅ Página unida con '{titulo_anterior}'")
+                                        st.rerun()
+                                with btn_col3:
+                                    # Botón eliminar (no disponible para página raíz)
+                                    if not pagina.get('es_raiz', False) and st.button("🗑️", key=f"delete_page_{idx}", help="Eliminar página"):
+                                        titulo_eliminado = pagina['titulo']
+                                        # Buscar el padre de esta página para reasignar hijos
+                                        padre_actual = pagina.get('padre')
+                                        # Actualizar referencias de páginas hijas al abuelo
+                                        for p in estructura['paginas']:
+                                            if p.get('padre') == titulo_eliminado:
+                                                p['padre'] = padre_actual  # Reasignar al abuelo (o None si no hay)
+                                        # Eliminar la página
+                                        del estructura['paginas'][idx]
+                                        # Limpiar clave de título en session_state
+                                        if title_key in st.session_state:
+                                            del st.session_state[title_key]
+                                        st.session_state.wiki_create_estructura_editada = estructura
+                                        st.success(f"✅ Página '{titulo_eliminado}' eliminada")
+                                        st.rerun()
 
                             # Editor de CONTENIDO (sin campo de título, ya se edita arriba)
                             if st.session_state.get(f"editing_page_{idx}", False):
