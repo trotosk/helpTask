@@ -640,23 +640,73 @@ def construir_contexto_devops(incidencias_similares):
 # ==================================================
 
 def leer_docx_desde_bytes(file_bytes):
-    """Lee un documento Word desde bytes"""
+    """Lee un documento Word desde bytes y convierte a Markdown preservando tablas,
+    encabezados y formato (negrita/cursiva), manteniendo el orden original del documento."""
     try:
+        from docx.text.paragraph import Paragraph as DocxParagraph
+        from docx.table import Table as DocxTable
+
         doc = docx.Document(BytesIO(file_bytes))
-        texto_completo = []
-        
-        for para in doc.paragraphs:
-            if para.text.strip():
-                texto_completo.append(para.text.strip())
-        
-        # También extraer texto de tablas
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    if cell.text.strip():
-                        texto_completo.append(cell.text.strip())
-        
-        return "\n\n".join(texto_completo)
+
+        HEADING_MAP = {
+            'Heading 1': '#', 'Heading 2': '##', 'Heading 3': '###',
+            'Heading 4': '####', 'Title': '#', 'Subtitle': '##',
+        }
+
+        def runs_to_md(para):
+            parts = []
+            for run in para.runs:
+                t = run.text
+                if not t:
+                    continue
+                if run.bold and run.italic:
+                    t = f'***{t}***'
+                elif run.bold:
+                    t = f'**{t}**'
+                elif run.italic:
+                    t = f'*{t}*'
+                parts.append(t)
+            return ''.join(parts)
+
+        def para_to_md(para):
+            text = runs_to_md(para)
+            if not text.strip():
+                return None
+            style = para.style.name if para.style else ''
+            for key, prefix in HEADING_MAP.items():
+                if style.startswith(key):
+                    return f'{prefix} {text.strip()}'
+            if 'List Bullet' in style:
+                return f'- {text.strip()}'
+            if 'List Number' in style:
+                return f'1. {text.strip()}'
+            return text.strip()
+
+        def table_to_md(tbl):
+            rows_md = []
+            for i, row in enumerate(tbl.rows):
+                cells = [c.text.strip().replace('\n', ' ') for c in row.cells]
+                rows_md.append('| ' + ' | '.join(cells) + ' |')
+                if i == 0:
+                    rows_md.append('| ' + ' | '.join(['---'] * len(cells)) + ' |')
+            return '\n'.join(rows_md)
+
+        # Iterar los elementos del body en orden de documento (párrafos y tablas intercalados)
+        lineas = []
+        for child in doc.element.body:
+            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+            if tag == 'p':
+                para = DocxParagraph(child, doc)
+                md = para_to_md(para)
+                if md:
+                    lineas.append(md)
+            elif tag == 'tbl':
+                tbl = DocxTable(child, doc)
+                lineas.append('')
+                lineas.append(table_to_md(tbl))
+                lineas.append('')
+
+        return '\n\n'.join(l for l in lineas if l is not None)
     except Exception as e:
         st.error(f"Error al leer documento: {str(e)}")
         return ""
@@ -1088,43 +1138,40 @@ def leer_pdf_desde_bytes(file_bytes):
 
 def detectar_encabezados_principales(contenido_documento):
     """
-    Detecta automáticamente los encabezados principales del documento
-    Retorna lista de encabezados con su posición
+    Detecta únicamente los encabezados de PRIMER NIVEL del documento.
+    Excluye subapartados (1.1, 1.2.3), subheadings (##, ###), etc.
     """
     lineas = contenido_documento.split('\n')
     encabezados = []
 
     for idx, linea in enumerate(lineas):
         linea_limpia = linea.strip()
-
-        # Detectar encabezados por patrones comunes
         es_encabezado = False
 
-        # Patrón 1: Números al inicio (1., 2., 1.1, etc.)
-        if re.match(r'^\d+\.(\d+\.)*\s+[A-Z]', linea_limpia):
+        # Patrón 1: Numeración de primer nivel ÚNICAMENTE (1. Título, 2. Título)
+        # Excluir subsecciones como 1.1, 2.3.1, etc.
+        if re.match(r'^\d+\.\s+\S', linea_limpia) and not re.match(r'^\d+\.\d', linea_limpia):
             es_encabezado = True
 
-        # Patrón 2: Todo en mayúsculas y largo suficiente
+        # Patrón 2: Todo en mayúsculas (cabeceras sin número)
         elif len(linea_limpia) > 5 and len(linea_limpia) < 100 and linea_limpia.isupper() and not linea_limpia.startswith('-'):
             es_encabezado = True
 
-        # Patrón 3: Markdown headers (#, ##, ###)
-        elif re.match(r'^#{1,3}\s+', linea_limpia):
+        # Patrón 3: Solo Markdown h1 (#). Excluir ## y ###
+        elif re.match(r'^#\s+', linea_limpia):
             es_encabezado = True
 
-        # Patrón 4: Línea seguida de guiones/iguales (estilo rst)
+        # Patrón 4: Línea seguida de iguales/guiones largos (subrayado estilo rst)
         elif idx < len(lineas) - 1:
             siguiente = lineas[idx + 1].strip()
             if len(linea_limpia) > 3 and len(linea_limpia) < 100:
-                if re.match(r'^[=\-]{3,}$', siguiente):
+                if re.match(r'^={3,}$', siguiente):  # Solo === (nivel 1), no ---
                     es_encabezado = True
 
         if es_encabezado and linea_limpia:
-            # Limpiar el título
-            titulo = re.sub(r'^\d+\.(\d+\.)*\s*', '', linea_limpia)
+            titulo = re.sub(r'^\d+\.\s*', '', linea_limpia)
             titulo = re.sub(r'^#+\s*', '', titulo)
             titulo = titulo.strip()
-
             if titulo and len(titulo) > 3:
                 encabezados.append({
                     'titulo': titulo,
@@ -1193,52 +1240,60 @@ def dividir_documento_por_encabezados(contenido_documento, filename):
 
 def extraer_contenido_seccion(contenido_documento, seccion_origen, titulo_pagina):
     """
-    Extrae el contenido completo de una sección específica del documento
+    Extrae el contenido completo de una sección del documento usando los encabezados
+    proporcionados como referencia. Detecta el final al encontrar el siguiente
+    encabezado del mismo nivel o superior (no para en sub-encabezados).
     """
     if not seccion_origen:
         return f"# {titulo_pagina}\n\n[Contenido pendiente de asignar]"
 
-    # Buscar por los encabezados posibles
-    posibles_encabezados = [s.strip() for s in seccion_origen.split('|')]
-
-    # Dividir el documento en líneas
+    posibles_encabezados = [s.strip() for s in seccion_origen.split('|') if s.strip()]
     lineas = contenido_documento.split('\n')
 
     # Buscar el inicio de la sección
     inicio_idx = None
+    nivel_encabezado = 1  # nivel Markdown del encabezado encontrado
     for idx, linea in enumerate(lineas):
         linea_limpia = linea.strip()
-        for encabezado in posibles_encabezados:
-            if encabezado.lower() in linea_limpia.lower():
+        for enc in posibles_encabezados:
+            if len(enc) > 3 and enc.lower() in linea_limpia.lower():
                 inicio_idx = idx
+                # Determinar el nivel del encabezado (para no parar en sub-headings)
+                m = re.match(r'^(#+)\s', linea_limpia)
+                if m:
+                    nivel_encabezado = len(m.group(1))
                 break
         if inicio_idx is not None:
             break
 
     if inicio_idx is None:
-        # Si no se encuentra, devolver una porción del documento
-        return f"# {titulo_pagina}\n\n{contenido_documento[:3000]}"
+        # Si no se encuentra la sección, devolver el documento completo como fallback
+        return f"# {titulo_pagina}\n\n{contenido_documento}"
 
-    # Buscar el final de la sección (siguiente encabezado principal o final del documento)
+    # Buscar el final: solo parar en encabezados del MISMO nivel o superior
     fin_idx = len(lineas)
     for idx in range(inicio_idx + 1, len(lineas)):
         linea = lineas[idx].strip()
-        # Detectar encabezados (números, mayúsculas, etc.)
-        if (linea and (
-            re.match(r'^\d+\.', linea) or  # Empieza con número
-            (len(linea) > 10 and linea.isupper()) or  # Todo mayúsculas
-            linea.startswith('#')  # Markdown header
-        )):
+        if not linea:
+            continue
+        # Encabezado Markdown del mismo nivel o mayor (ej: si estamos en ##, parar en ## o #)
+        m = re.match(r'^(#+)\s', linea)
+        if m and len(m.group(1)) <= nivel_encabezado:
             fin_idx = idx
             break
+        # Encabezado numerado de primer nivel (1. Título) cuando no hay Markdown
+        if nivel_encabezado == 1:
+            if (re.match(r'^\d+\.\s+\S', linea) and not re.match(r'^\d+\.\d', linea)
+                    and idx != inicio_idx):
+                fin_idx = idx
+                break
+            # Línea en mayúsculas que parece encabezado principal
+            if len(linea) > 5 and len(linea) < 100 and linea.isupper() and idx != inicio_idx:
+                fin_idx = idx
+                break
 
-    # Extraer contenido
-    contenido_seccion = '\n'.join(lineas[inicio_idx:fin_idx])
-
-    # Formatear en markdown
-    contenido_markdown = f"# {titulo_pagina}\n\n{contenido_seccion.strip()}"
-
-    return contenido_markdown
+    contenido_seccion = '\n'.join(lineas[inicio_idx:fin_idx]).strip()
+    return f"# {titulo_pagina}\n\n{contenido_seccion}"
 
 def generar_resumen_documento(contenido_documento, filename):
     """
@@ -1309,37 +1364,19 @@ Crea un glosario en formato markdown con:
     except:
         return "# Glosario\n\n[Glosario pendiente de generar]"
 
-def analizar_documento_con_frida(contenido_documento, filename):
-    """
-    Usa Frida para analizar el documento y proponer una estructura de wiki
-    Retorna una estructura jerárquica de páginas sugeridas
-    """
-    prompt_analisis = f"""Analiza el siguiente documento funcional y propón una estructura jerárquica de páginas Wiki.
+def _analizar_chunk_con_frida(chunk, filename, chunk_info="", orden_base=0):
+    """Llama a la IA para analizar un fragmento del documento y obtener su estructura."""
+    prompt = f"""Analiza el siguiente fragmento de un documento funcional{chunk_info} y propón las páginas Wiki que corresponden a este fragmento.
 
 **Documento:** {filename}
 
-**Contenido del documento:**
-{contenido_documento[:20000]}
-{"[Documento truncado para análisis, pero el contenido COMPLETO se usará en la wiki...]" if len(contenido_documento) > 20000 else ""}
+**Fragmento del documento:**
+{chunk}
 
 **IMPORTANTE:**
-- El contenido COMPLETO del documento se incluirá en las páginas
-- NO resumas ni omitas nada
-- Solo propón la ESTRUCTURA (títulos y organización)
-
-**Tu tarea:**
-Propón una estructura jerárquica indicando para cada página:
-1. Título de la página
-2. Encabezados del documento original que corresponden a esta sección
-3. Tipo de página: "resumen", "contenido_completo", o "glosario"
-
-**Páginas especiales:**
-- Página "Resumen General" (resumen ejecutivo corto)
-- Página "Glosario" (solo si hay términos técnicos)
-
-**Resto de páginas:**
-- Deben contener el contenido COMPLETO de cada sección del documento
-- Divide en secciones lógicas según los encabezados del documento
+- Solo propón la ESTRUCTURA (títulos de páginas y a qué sección del documento corresponden)
+- NO resumas ni omitas secciones del fragmento
+- Cada sección con contenido propio debe ser una página
 
 **Formato de respuesta (JSON):**
 
@@ -1347,96 +1384,133 @@ Propón una estructura jerárquica indicando para cada página:
 {{
   "paginas": [
     {{
-      "titulo": "Resumen General",
-      "es_raiz": true,
-      "padre": null,
-      "tipo": "resumen",
-      "seccion_origen": "",
-      "orden": 0
-    }},
-    {{
-      "titulo": "Introducción",
+      "titulo": "Nombre de la sección",
       "es_raiz": false,
       "padre": "Resumen General",
       "tipo": "contenido_completo",
-      "seccion_origen": "1. Introducción|INTRODUCCIÓN|Introducción",
-      "orden": 1
-    }},
-    {{
-      "titulo": "Glosario",
-      "es_raiz": false,
-      "padre": "Resumen General",
-      "tipo": "glosario",
-      "seccion_origen": "",
-      "orden": 99
+      "seccion_origen": "Encabezado exacto del documento|variante alternativa",
+      "orden": {orden_base + 1}
     }}
   ]
 }}
 ```
 
 **Campos:**
-- `tipo`: "resumen", "contenido_completo", o "glosario"
-- `seccion_origen`: Encabezados del documento que corresponden (separados por |)
+- `tipo`: solo "contenido_completo" para páginas de secciones normales
+- `seccion_origen`: texto exacto del encabezado tal como aparece en el documento (separar variantes con |)
+- NO incluyas páginas de "resumen" ni "glosario", esas se añaden globalmente
 
 **Reglas:**
-- Máximo 12 páginas de contenido + resumen + glosario
-- Jerarquía de máximo 2 niveles
-- Sigue el orden lógico del documento"""
+- Máximo 10 páginas por fragmento
+- Sigue el orden del fragmento
+- Si el fragmento no tiene secciones distinguibles, devuelve una sola página con todo"""
 
     payload = {
         "model": st.session_state.model,
         "messages": [
-            {
-                "role": "system",
-                "content": "Eres un experto en estructuración de documentación. Tu trabajo es proponer la ESTRUCTURA, no generar contenido."
-            },
-            {
-                "role": "user",
-                "content": prompt_analisis
-            }
+            {"role": "system", "content": "Eres un experto en estructuración de documentación. Propón la ESTRUCTURA de páginas wiki para el fragmento dado."},
+            {"role": "user", "content": prompt}
         ],
         "temperature": 0.3
     }
+    respuesta = call_ia(payload)
+    json_match = re.search(r'```json\s*(.*?)\s*```', respuesta, re.DOTALL)
+    json_str = json_match.group(1) if json_match else respuesta
+    return json.loads(json_str)
 
+
+def analizar_documento_con_frida(contenido_documento, filename):
+    """
+    Usa Frida para analizar el documento completo y proponer una estructura de wiki.
+    Para documentos grandes los divide en chunks y luego fusiona la estructura.
+    """
+    CHUNK_SIZE = 22000   # caracteres por chunk para análisis de estructura
+    OVERLAP    = 1500    # solapamiento para no perder secciones en los límites
+
+    # --- Paso 1: Analizar estructura (con soporte para docs grandes) ---
     try:
-        with st.spinner("🧠 Paso 1/2: Frida está analizando la estructura del documento..."):
-            respuesta = call_ia(payload)
+        todas_paginas_contenido = []  # páginas de tipo contenido_completo
 
-        # Extraer JSON de la respuesta
-        json_match = re.search(r'```json\s*(.*?)\s*```', respuesta, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(1)
-            estructura = json.loads(json_str)
+        if len(contenido_documento) <= CHUNK_SIZE:
+            chunks = [contenido_documento]
         else:
-            estructura = json.loads(respuesta)
+            # Dividir en chunks solapados para no perder secciones en los cortes
+            chunks = []
+            pos = 0
+            while pos < len(contenido_documento):
+                fin = min(pos + CHUNK_SIZE, len(contenido_documento))
+                # Intentar cortar en salto de línea para no partir oraciones
+                if fin < len(contenido_documento):
+                    salto = contenido_documento.rfind('\n', pos, fin)
+                    if salto > pos:
+                        fin = salto
+                chunks.append(contenido_documento[pos:fin])
+                pos = fin - OVERLAP if fin < len(contenido_documento) else fin
+            chunks = chunks[:5]  # máximo 5 chunks (documentos muy grandes)
 
-        # Paso 2: Generar contenido completo para cada página
-        total_paginas = len(estructura['paginas'])
-        with st.spinner(f"📝 Paso 2/2: Extrayendo contenido completo ({total_paginas} páginas)..."):
+        total_chunks = len(chunks)
+        with st.spinner(f"🧠 Paso 1/3: Analizando estructura del documento ({total_chunks} {'parte' if total_chunks == 1 else 'partes'})..."):
+            titulos_vistos = set()
+            orden_actual = 1
+
+            for i, chunk in enumerate(chunks):
+                chunk_info = f" (parte {i+1}/{total_chunks})" if total_chunks > 1 else ""
+                st.caption(f"  Analizando{chunk_info}...")
+                try:
+                    resultado = _analizar_chunk_con_frida(chunk, filename, chunk_info, orden_actual)
+                    for p in resultado.get('paginas', []):
+                        # Deduplicar por título similar
+                        titulo_norm = p['titulo'].lower().strip()
+                        if titulo_norm not in titulos_vistos:
+                            titulos_vistos.add(titulo_norm)
+                            p['orden'] = orden_actual
+                            p['es_raiz'] = False
+                            p['padre'] = 'Resumen General'
+                            p['tipo'] = 'contenido_completo'
+                            todas_paginas_contenido.append(p)
+                            orden_actual += 1
+                except Exception as e:
+                    st.warning(f"⚠️ Error analizando parte {i+1}: {e}")
+
+        # Añadir páginas especiales (resumen al principio, glosario al final)
+        paginas_finales = [
+            {"titulo": "Resumen General", "es_raiz": True, "padre": None,
+             "tipo": "resumen", "seccion_origen": "", "orden": 0}
+        ] + todas_paginas_contenido + [
+            {"titulo": "Glosario", "es_raiz": False, "padre": "Resumen General",
+             "tipo": "glosario", "seccion_origen": "", "orden": orden_actual}
+        ]
+
+        estructura = {"paginas": paginas_finales}
+
+    except Exception as e:
+        st.error(f"Error al analizar estructura: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+        return None
+
+    # --- Paso 2: Extraer contenido completo para cada página ---
+    total_paginas = len(estructura['paginas'])
+    try:
+        with st.spinner(f"📝 Paso 2/3: Extrayendo contenido de {total_paginas} páginas..."):
             for idx, pagina in enumerate(estructura['paginas']):
-                progress_msg = f"  [{idx+1}/{total_paginas}] {pagina['titulo']}"
-                st.caption(progress_msg)
-
+                st.caption(f"  [{idx+1}/{total_paginas}] {pagina['titulo']}")
                 if pagina['tipo'] == 'resumen':
                     pagina['contenido_markdown'] = generar_resumen_documento(contenido_documento, filename)
                 elif pagina['tipo'] == 'glosario':
                     pagina['contenido_markdown'] = generar_glosario_documento(contenido_documento)
-                else:  # contenido_completo
+                else:
                     pagina['contenido_markdown'] = extraer_contenido_seccion(
                         contenido_documento,
                         pagina.get('seccion_origen', ''),
                         pagina['titulo']
                     )
 
-        st.success(f"✅ Estructura generada con {total_paginas} páginas (contenido completo incluido)")
+        st.success(f"✅ Estructura generada: {total_paginas} páginas con contenido completo")
         return estructura
 
-    except json.JSONDecodeError as e:
-        st.error(f"Error al parsear respuesta de Frida: {str(e)}")
-        st.code(respuesta[:1000])
-        return None
     except Exception as e:
-        st.error(f"Error al analizar documento: {str(e)}")
+        st.error(f"Error al extraer contenido: {str(e)}")
         import traceback
         st.code(traceback.format_exc())
         return None
@@ -2378,6 +2452,12 @@ with tab_devops:
                                 if estructura and "paginas" in estructura:
                                     st.session_state.wiki_create_estructura_propuesta = estructura
                                     st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
+                                    # Inicializar claves de títulos editables para la nueva estructura
+                                    for k in list(st.session_state.keys()):
+                                        if k.startswith("titulo_wiki_"):
+                                            del st.session_state[k]
+                                    for i, p in enumerate(estructura['paginas']):
+                                        st.session_state[f"titulo_wiki_{i}"] = p['titulo']
                                     st.success(f"✅ Estructura propuesta: {len(estructura['paginas'])} páginas")
                                     st.rerun()
                                 else:
@@ -2414,6 +2494,11 @@ with tab_devops:
                             st.session_state.wiki_create_estructura_propuesta = estructura
                             st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
                             st.session_state.wiki_create_ready_to_create = True
+                            for k in list(st.session_state.keys()):
+                                if k.startswith("titulo_wiki_"):
+                                    del st.session_state[k]
+                            for i, p in enumerate(estructura['paginas']):
+                                st.session_state[f"titulo_wiki_{i}"] = p['titulo']
                             st.success("✅ Estructura creada: 1 página con todo el contenido")
                             st.rerun()
     
@@ -2454,6 +2539,11 @@ with tab_devops:
                             st.session_state.wiki_create_estructura_propuesta = estructura
                             st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
                             st.session_state.wiki_create_ready_to_create = True
+                            for k in list(st.session_state.keys()):
+                                if k.startswith("titulo_wiki_"):
+                                    del st.session_state[k]
+                            for i, p in enumerate(estructura['paginas']):
+                                st.session_state[f"titulo_wiki_{i}"] = p['titulo']
                             st.success("✅ Estructura creada: 2 páginas (Resumen + Documento completo)")
                             st.rerun()
     
@@ -2479,7 +2569,12 @@ with tab_devops:
                                 st.session_state.wiki_create_estructura_propuesta = estructura
                                 st.session_state.wiki_create_estructura_editada = json.loads(json.dumps(estructura))
                                 st.session_state.wiki_create_ready_to_create = True
-    
+                                for k in list(st.session_state.keys()):
+                                    if k.startswith("titulo_wiki_"):
+                                        del st.session_state[k]
+                                for i, p in enumerate(estructura['paginas']):
+                                    st.session_state[f"titulo_wiki_{i}"] = p['titulo']
+
                                 if num_paginas > 1:
                                     st.success(f"✅ Estructura creada: {num_paginas} páginas (1 índice + {num_paginas-1} secciones)")
                                 else:
@@ -2489,69 +2584,82 @@ with tab_devops:
             # === PASO 3: REVISAR Y EDITAR ESTRUCTURA ===
             if st.session_state.wiki_create_estructura_propuesta:
                 with st.expander("📝 Paso 3: Revisar y Editar Estructura Propuesta", expanded=True):
-                    st.markdown("**Revisa la estructura propuesta por Frida. Puedes editar el contenido de cada página.**")
-    
+                    st.markdown("**Revisa la estructura. Edita los nombres directamente en cada fila. Usa ✏️ para editar el contenido.**")
+
                     estructura = st.session_state.wiki_create_estructura_editada
-    
-                    # Mostrar árbol de páginas
+
                     st.markdown("#### 🌳 Estructura de Páginas:")
-    
+
                     for idx, pagina in enumerate(estructura['paginas']):
                         nivel = 0 if pagina.get('es_raiz', False) else 1
                         if pagina.get('padre') and not pagina.get('es_raiz', False):
-                            # Contar niveles basándose en la jerarquía
                             padre = pagina.get('padre', '')
                             for p in estructura['paginas']:
                                 if p['titulo'] == padre and not p.get('es_raiz', False):
                                     nivel = 2
                                     break
-    
+
                         indent = "　　" * nivel
                         icon = "📄" if pagina.get('es_raiz', False) else ("📁" if nivel == 1 else "📃")
-    
+                        title_key = f"titulo_wiki_{idx}"
+
+                        # Inicializar la clave si aún no existe (carga inicial)
+                        if title_key not in st.session_state:
+                            st.session_state[title_key] = pagina['titulo']
+
                         with st.container():
-                            col_titulo, col_acciones = st.columns([4, 1])
-    
+                            col_icon, col_titulo, col_acciones = st.columns([0.4, 5, 1])
+
+                            with col_icon:
+                                st.markdown(f"{indent}{icon}")
+
                             with col_titulo:
-                                st.markdown(f"{indent}{icon} **{pagina['titulo']}**")
-    
+                                # Título siempre editable en línea
+                                nuevo_titulo = st.text_input(
+                                    "Nombre de la página wiki",
+                                    key=title_key,
+                                    label_visibility="collapsed"
+                                )
+                                # Sincronizar cambio de título a la estructura
+                                if nuevo_titulo and nuevo_titulo != pagina['titulo']:
+                                    old_titulo = pagina['titulo']
+                                    estructura['paginas'][idx]['titulo'] = nuevo_titulo
+                                    for p in estructura['paginas']:
+                                        if p.get('padre') == old_titulo:
+                                            p['padre'] = nuevo_titulo
+                                    st.session_state.wiki_create_estructura_editada = estructura
+
                             with col_acciones:
-                                if st.button("✏️ Editar", key=f"edit_page_{idx}"):
+                                if st.button("✏️", key=f"edit_page_{idx}", help="Editar contenido"):
                                     st.session_state[f"editing_page_{idx}"] = True
                                     st.rerun()
-    
-                            # Mostrar editor si está en modo edición
+
+                            # Editor de CONTENIDO (sin campo de título, ya se edita arriba)
                             if st.session_state.get(f"editing_page_{idx}", False):
-                                st.markdown(f"**Editando:** {pagina['titulo']}")
-    
-                                nuevo_titulo = st.text_input(
-                                    "Título",
-                                    value=pagina['titulo'],
-                                    key=f"titulo_{idx}"
-                                )
-    
+                                titulo_actual = st.session_state.get(title_key, pagina['titulo'])
+                                st.markdown(f"**Editando contenido de:** *{titulo_actual}*")
+
                                 nuevo_contenido = st.text_area(
                                     "Contenido (Markdown)",
                                     value=pagina['contenido_markdown'],
                                     height=200,
                                     key=f"contenido_{idx}"
                                 )
-    
+
                                 col_save, col_improve, col_cancel = st.columns([1, 1, 1])
-    
+
                                 with col_save:
                                     if st.button("💾 Guardar", key=f"save_{idx}", use_container_width=True):
-                                        estructura['paginas'][idx]['titulo'] = nuevo_titulo
                                         estructura['paginas'][idx]['contenido_markdown'] = nuevo_contenido
                                         st.session_state.wiki_create_estructura_editada = estructura
                                         st.session_state[f"editing_page_{idx}"] = False
                                         st.success("✅ Guardado")
                                         st.rerun()
-    
+
                                 with col_improve:
                                     if st.button("✨ Mejorar con Frida", key=f"improve_{idx}", use_container_width=True):
                                         contenido_mejorado = mejorar_contenido_pagina_con_frida(
-                                            nuevo_titulo,
+                                            titulo_actual,
                                             nuevo_contenido,
                                             st.session_state.wiki_create_doc_content[:3000]
                                         )
@@ -2559,13 +2667,13 @@ with tab_devops:
                                         st.session_state.wiki_create_estructura_editada = estructura
                                         st.success("✅ Mejorado")
                                         st.rerun()
-    
+
                                 with col_cancel:
                                     if st.button("❌ Cancelar", key=f"cancel_{idx}", use_container_width=True):
                                         st.session_state[f"editing_page_{idx}"] = False
                                         st.rerun()
-    
-                            st.markdown("---")
+
+                        st.markdown("---")
     
                     st.markdown("---")
     
