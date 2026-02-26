@@ -111,7 +111,9 @@ defaults = {
     "wiki_create_estructura_editada": None,
     "wiki_create_modo": "nueva",  # "nueva" o "extender"
     "wiki_create_pagina_padre": "",
-    "wiki_create_ready_to_create": False
+    "wiki_create_ready_to_create": False,
+    # Estado para páginas wiki con error (reintentar)
+    "wiki_paginas_fallidas": []
 }
 
 for k, v in defaults.items():
@@ -1834,11 +1836,12 @@ with tab_devops:
     st.markdown("---")
 
     # Crear subtabs
-    subtab_workitems, subtab_wiki, subtab_crear_wiki, subtab_crear_tarea = st.tabs([
+    subtab_workitems, subtab_wiki, subtab_crear_wiki, subtab_crear_tarea, subtab_analisis = st.tabs([
         "📋 Consulta Work Items",
         "📚 Consulta Wiki",
         "🔨 Crear Wiki desde Documento",
-        "➕ Crear Tarea"
+        "➕ Crear Tarea",
+        "🔍 Análisis de Tareas"
     ])
 
     # ================= SUBTAB 1: CONSULTA WORK ITEMS =================
@@ -2862,41 +2865,37 @@ with tab_devops:
                     if st.button("🚀 Crear Páginas en Wiki", use_container_width=True, type="primary", key="crear_paginas_finales"):
                         estructura = st.session_state.wiki_create_estructura_editada
                         paginas = estructura['paginas']
-    
+
                         # Ordenar páginas por orden y jerarquía
                         paginas_ordenadas = sorted(paginas, key=lambda x: x.get('orden', 0))
-    
+
                         progress_bar = st.progress(0)
                         status_text = st.empty()
-    
+
                         exitos = 0
                         errores = 0
-    
+                        paginas_fallidas_nuevas = []
+
                         # Mapa para tracking de paths reales de páginas creadas
                         titulo_a_path = {}
-    
+
                         for idx, pagina in enumerate(paginas_ordenadas):
                             progress_bar.progress((idx + 1) / len(paginas_ordenadas))
                             status_text.text(f"Creando: {pagina['titulo']} ({idx + 1}/{len(paginas_ordenadas)})")
-    
+
                             titulo_clean = pagina['titulo'].replace(' ', '-')
-    
-                            # Construir path correctamente usando el mapa de paths
+
+                            # Construir path usando el mapa de paths
                             if st.session_state.wiki_create_modo == "nueva":
-                                # Modo nueva: crear desde raíz
                                 if pagina.get('es_raiz', False):
                                     path = f"/{titulo_clean}"
                                 else:
                                     padre_titulo = pagina.get('padre', '')
                                     if padre_titulo and padre_titulo in titulo_a_path:
-                                        # Usar el path real del padre desde el mapa
-                                        path_padre = titulo_a_path[padre_titulo]
-                                        path = f"{path_padre}/{titulo_clean}"
+                                        path = f"{titulo_a_path[padre_titulo]}/{titulo_clean}"
                                     else:
-                                        # Fallback: asumir que está en la raíz
                                         path = f"/{titulo_clean}"
                             else:
-                                # Modo extender: añadir bajo página padre
                                 base_path = st.session_state.wiki_create_pagina_padre
                                 if base_path == "/":
                                     path = f"/{titulo_clean}"
@@ -2906,13 +2905,10 @@ with tab_devops:
                                     else:
                                         padre_titulo = pagina.get('padre', '')
                                         if padre_titulo and padre_titulo in titulo_a_path:
-                                            # Usar el path real del padre
-                                            path_padre = titulo_a_path[padre_titulo]
-                                            path = f"{path_padre}/{titulo_clean}"
+                                            path = f"{titulo_a_path[padre_titulo]}/{titulo_clean}"
                                         else:
                                             path = f"{base_path}/{titulo_clean}"
-    
-                            # Crear la página
+
                             success, result = crear_pagina_wiki_azure(
                                 st.session_state.devops_org,
                                 st.session_state.devops_project,
@@ -2921,19 +2917,27 @@ with tab_devops:
                                 path,
                                 pagina['contenido_markdown']
                             )
-    
+
                             if success:
                                 exitos += 1
-                                # Guardar el path real en el mapa
                                 titulo_a_path[pagina['titulo']] = path
                                 st.success(f"✅ Creada: {pagina['titulo']} → {path}")
                             else:
                                 errores += 1
                                 st.error(f"❌ Error: {pagina['titulo']}")
-    
+                                # Guardar la página fallida con su path calculado
+                                paginas_fallidas_nuevas.append({
+                                    "titulo": pagina['titulo'],
+                                    "path": path,
+                                    "contenido_markdown": pagina['contenido_markdown'],
+                                    "wiki_id": st.session_state.selected_wiki_id_crear
+                                })
+
                         progress_bar.progress(1.0)
                         status_text.text("¡Creación completada!")
-    
+                        # Persistir páginas fallidas para reintentar
+                        st.session_state.wiki_paginas_fallidas = paginas_fallidas_nuevas
+
                         st.markdown("---")
                         st.success(f"""
                         **✅ Proceso completado**
@@ -2954,6 +2958,32 @@ with tab_devops:
                             if 'wiki_estructura_existente' in st.session_state:
                                 del st.session_state.wiki_estructura_existente
                             st.rerun()
+
+        # === REINTENTAR PÁGINAS CON ERROR ===
+        if st.session_state.wiki_paginas_fallidas:
+            st.markdown("---")
+            st.warning(f"⚠️ **{len(st.session_state.wiki_paginas_fallidas)} página(s) no se crearon correctamente.** Puedes reintentarlas individualmente:")
+            for fi, pf in enumerate(list(st.session_state.wiki_paginas_fallidas)):
+                col_info, col_btn = st.columns([4, 1])
+                with col_info:
+                    st.markdown(f"❌ **{pf['titulo']}** → `{pf['path']}`")
+                with col_btn:
+                    if st.button("🔄 Reintentar", key=f"retry_wiki_{fi}", use_container_width=True):
+                        with st.spinner(f"Reintentando: {pf['titulo']}..."):
+                            success, _ = crear_pagina_wiki_azure(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat,
+                                pf['wiki_id'],
+                                pf['path'],
+                                pf['contenido_markdown']
+                            )
+                        if success:
+                            st.success(f"✅ Creada: {pf['titulo']}")
+                            st.session_state.wiki_paginas_fallidas.pop(fi)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Sigue fallando: {pf['titulo']}")
 
     # ================= SUBTAB 4: CREAR TAREA =================
     with subtab_crear_tarea:
@@ -3691,6 +3721,319 @@ REGLAS CRÍTICAS:
                     st.session_state.custom_prompt_workitem = ""
                     st.session_state.current_field_mappings = {}
                     st.rerun()
+
+    # ================= SUBTAB 5: ANÁLISIS DE TAREAS =================
+    with subtab_analisis:
+        st.subheader("🔍 Análisis de Tareas Azure DevOps")
+
+        if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
+            st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
+        elif not st.session_state.devops_indexed or not st.session_state.devops_incidencias:
+            st.warning("⚠️ Primero sincroniza e indexa los Work Items en la pestaña **Consulta Work Items**")
+        else:
+            # Obtener tipos disponibles en los work items indexados
+            tipos_disponibles = sorted(set(inc['tipo'] for inc in st.session_state.devops_incidencias))
+
+            analisis_tab_a, analisis_tab_b = st.tabs([
+                "📊 Comparar Tareas con Fuente",
+                "📄 Generar Documentación Funcional"
+            ])
+
+            # -------- SECCIÓN A: COMPARAR TAREAS vs WIKI/DOCUMENTO --------
+            with analisis_tab_a:
+                st.markdown("### Comparar Tareas de Azure con Wiki o Documento")
+                st.markdown(
+                    "Selecciona los tipos de work items y una fuente de referencia (Wiki indexada o documento local). "
+                    "Frida analizará qué tareas están reflejadas en la fuente y qué aspectos faltan."
+                )
+
+                col_filtro_a1, col_filtro_a2 = st.columns(2)
+                with col_filtro_a1:
+                    tipos_sel_a = st.multiselect(
+                        "Tipos de work items a analizar",
+                        options=tipos_disponibles,
+                        default=tipos_disponibles[:1] if tipos_disponibles else [],
+                        key="analisis_tipos_sel_a"
+                    )
+                with col_filtro_a2:
+                    fuente_comparacion = st.radio(
+                        "Fuente de referencia",
+                        options=["Wiki indexada", "Documento local (DOCX/PDF)"],
+                        key="analisis_fuente_comp"
+                    )
+
+                # Fuente: documento local
+                contenido_fuente = ""
+                nombre_fuente = ""
+                if fuente_comparacion == "Documento local (DOCX/PDF)":
+                    doc_upload = st.file_uploader(
+                        "Sube el documento funcional",
+                        type=["docx", "pdf", "txt"],
+                        key="analisis_doc_upload"
+                    )
+                    if doc_upload:
+                        file_bytes = doc_upload.read()
+                        nombre_fuente = doc_upload.name
+                        ext = doc_upload.name.rsplit(".", 1)[-1].lower()
+                        if ext == "docx":
+                            contenido_fuente = leer_docx_desde_bytes(file_bytes)
+                        elif ext == "pdf":
+                            contenido_fuente = leer_pdf_desde_bytes(file_bytes)
+                        elif ext == "txt":
+                            contenido_fuente = file_bytes.decode("utf-8", errors="replace")
+                        if contenido_fuente:
+                            st.success(f"✅ Documento cargado: {nombre_fuente} ({len(contenido_fuente):,} caracteres)")
+                else:
+                    # Wiki indexada
+                    if st.session_state.wiki_indexed and st.session_state.wiki_paginas_contenido:
+                        nombre_fuente = f"Wiki ({len(st.session_state.wiki_paginas_contenido)} páginas)"
+                        contenido_fuente = "\n\n---\n\n".join(
+                            f"## {p.get('titulo', 'Sin título')}\n\n{p.get('contenido', '')}"
+                            for p in st.session_state.wiki_paginas_contenido
+                        )
+                        st.info(f"📚 Usando: {nombre_fuente} ({len(contenido_fuente):,} caracteres)")
+                    else:
+                        st.warning("⚠️ No hay Wiki indexada. Ve a la pestaña **Consulta Wiki** para indexarla primero, o usa un documento local.")
+
+                st.markdown("---")
+
+                if st.button("🔍 Comparar Tareas con Fuente", key="btn_comparar_tareas", use_container_width=True):
+                    if not tipos_sel_a:
+                        st.error("❌ Selecciona al menos un tipo de work item")
+                    elif not contenido_fuente:
+                        st.error("❌ No hay fuente de referencia disponible. Indexa la Wiki o sube un documento.")
+                    else:
+                        # Filtrar work items por tipo seleccionado
+                        items_filtrados = [
+                            inc for inc in st.session_state.devops_incidencias
+                            if inc['tipo'] in tipos_sel_a
+                        ]
+
+                        if not items_filtrados:
+                            st.error(f"❌ No hay work items de tipo: {', '.join(tipos_sel_a)}")
+                        else:
+                            # Construir resumen de tareas (limitar para no superar contexto)
+                            MAX_CHARS_TAREAS = 15000
+                            MAX_CHARS_FUENTE = 20000
+
+                            lineas_tareas = []
+                            chars_acum = 0
+                            for inc in items_filtrados:
+                                titulo = inc.get('titulo', '')
+                                desc = limpiar_html(inc.get('descripcion', ''))[:300]
+                                linea = f"- [{inc['tipo']}] ID:{inc.get('id','?')} — {titulo}"
+                                if desc:
+                                    linea += f"\n  Descripción: {desc}"
+                                chars_acum += len(linea)
+                                if chars_acum > MAX_CHARS_TAREAS:
+                                    lineas_tareas.append(f"_(... y {len(items_filtrados) - len(lineas_tareas)} más)_")
+                                    break
+                                lineas_tareas.append(linea)
+
+                            resumen_tareas = "\n".join(lineas_tareas)
+                            fuente_truncada = contenido_fuente[:MAX_CHARS_FUENTE]
+                            if len(contenido_fuente) > MAX_CHARS_FUENTE:
+                                fuente_truncada += f"\n\n_(Documento truncado a {MAX_CHARS_FUENTE:,} caracteres)_"
+
+                            prompt_comparacion = f"""Eres un analista experto en gestión de proyectos y documentación funcional.
+
+Se te proporcionan dos fuentes de información:
+
+## TAREAS AZURE DEVOPS ({len(items_filtrados)} work items de tipo: {', '.join(tipos_sel_a)})
+{resumen_tareas}
+
+## FUENTE DE REFERENCIA: {nombre_fuente}
+{fuente_truncada}
+
+## TU TAREA
+Analiza si las tareas de Azure DevOps están correctamente reflejadas en la fuente de referencia. Produce un informe estructurado con:
+
+### 1. Resumen ejecutivo
+Breve valoración general de la cobertura.
+
+### 2. Tareas bien documentadas en la fuente
+Lista las tareas/funcionalidades de Azure que SÍ están claramente recogidas en la fuente.
+
+### 3. Tareas NO reflejadas o con cobertura insuficiente
+Lista las tareas de Azure que NO aparecen o están mal descritas en la fuente. Para cada una, indica qué falta.
+
+### 4. Aspectos en la fuente NO cubiertos por tareas Azure
+Identifica secciones o funcionalidades del documento/wiki que NO tienen tarea asociada en Azure DevOps.
+
+### 5. Recomendaciones
+Acciones concretas para mejorar la alineación entre las tareas y la documentación.
+
+Responde en español, con formato Markdown claro."""
+
+                            payload = {
+                                "model": st.session_state.model,
+                                "messages": [{"role": "user", "content": prompt_comparacion}]
+                            }
+                            if st.session_state.include_temp:
+                                payload["temperature"] = st.session_state.temperature
+                            if st.session_state.include_tokens:
+                                payload["max_tokens"] = st.session_state.max_tokens
+
+                            with st.spinner(f"🤖 Frida está comparando {len(items_filtrados)} tareas con la fuente..."):
+                                resultado_comparacion = call_ia(payload)
+
+                            st.session_state['analisis_resultado_comparacion'] = resultado_comparacion
+                            st.session_state['analisis_num_items'] = len(items_filtrados)
+
+                if st.session_state.get('analisis_resultado_comparacion'):
+                    st.markdown("---")
+                    st.markdown(f"### 📊 Resultado del análisis ({st.session_state.get('analisis_num_items', 0)} tareas analizadas)")
+                    st.markdown(st.session_state['analisis_resultado_comparacion'])
+
+                    # Botón de descarga
+                    st.download_button(
+                        label="⬇️ Descargar análisis (.md)",
+                        data=st.session_state['analisis_resultado_comparacion'],
+                        file_name="analisis_cobertura_tareas.md",
+                        mime="text/markdown",
+                        key="download_analisis_comp"
+                    )
+
+            # -------- SECCIÓN B: GENERAR DOCUMENTACIÓN FUNCIONAL --------
+            with analisis_tab_b:
+                st.markdown("### Generar Documentación Funcional desde Tareas Azure")
+                st.markdown(
+                    "Frida generará un documento funcional estructurado a partir de los work items de Azure DevOps "
+                    "que selecciones. Útil para crear especificaciones o documentación de producto."
+                )
+
+                col_filtro_b1, col_filtro_b2 = st.columns(2)
+                with col_filtro_b1:
+                    tipos_sel_b = st.multiselect(
+                        "Tipos de work items a documentar",
+                        options=tipos_disponibles,
+                        default=tipos_disponibles[:1] if tipos_disponibles else [],
+                        key="analisis_tipos_sel_b"
+                    )
+                with col_filtro_b2:
+                    estilo_doc = st.selectbox(
+                        "Estilo de documentación",
+                        options=[
+                            "Especificación funcional (con requisitos numerados)",
+                            "Manual de usuario (orientado al usuario final)",
+                            "Documento técnico (orientado a desarrolladores)",
+                            "Resumen ejecutivo (para stakeholders)"
+                        ],
+                        key="analisis_estilo_doc"
+                    )
+
+                idioma_doc = st.radio(
+                    "Idioma del documento",
+                    options=["Español", "English"],
+                    horizontal=True,
+                    key="analisis_idioma_doc"
+                )
+
+                instrucciones_extra = st.text_area(
+                    "Instrucciones adicionales (opcional)",
+                    placeholder="ej: Incluye diagramas de flujo en texto, agrupa por módulos, añade tabla de requisitos...",
+                    height=80,
+                    key="analisis_instrucciones_extra"
+                )
+
+                st.markdown("---")
+
+                if st.button("📄 Generar Documentación Funcional", key="btn_generar_doc_func", use_container_width=True):
+                    if not tipos_sel_b:
+                        st.error("❌ Selecciona al menos un tipo de work item")
+                    else:
+                        items_doc = [
+                            inc for inc in st.session_state.devops_incidencias
+                            if inc['tipo'] in tipos_sel_b
+                        ]
+
+                        if not items_doc:
+                            st.error(f"❌ No hay work items de tipo: {', '.join(tipos_sel_b)}")
+                        else:
+                            MAX_CHARS_DOC = 25000
+                            lineas_doc = []
+                            chars_acum = 0
+                            for inc in items_doc:
+                                titulo = inc.get('titulo', '')
+                                desc = limpiar_html(inc.get('descripcion', ''))[:500]
+                                criterios = limpiar_html(inc.get('acceptance_criteria', ''))[:300]
+                                bloque = f"### [{inc['tipo']}] {titulo}\n"
+                                if desc:
+                                    bloque += f"**Descripción:** {desc}\n"
+                                if criterios:
+                                    bloque += f"**Criterios de aceptación:** {criterios}\n"
+                                chars_acum += len(bloque)
+                                if chars_acum > MAX_CHARS_DOC:
+                                    lineas_doc.append(f"_(... y {len(items_doc) - len(lineas_doc)} tareas más)_")
+                                    break
+                                lineas_doc.append(bloque)
+
+                            contenido_tareas_doc = "\n\n".join(lineas_doc)
+                            extra_instrucciones = f"\n\nInstrucciones adicionales del usuario: {instrucciones_extra}" if instrucciones_extra.strip() else ""
+
+                            prompt_doc_func = f"""Eres un analista funcional experto en documentación de software.
+Basándote en las siguientes tareas de Azure DevOps, genera un documento funcional completo en {idioma_doc}.
+
+Estilo solicitado: **{estilo_doc}**
+
+## TAREAS DE AZURE DEVOPS ({len(items_doc)} work items)
+
+{contenido_tareas_doc}
+{extra_instrucciones}
+
+## INSTRUCCIONES DE FORMATO
+- Genera un documento bien estructurado con índice, secciones y subsecciones
+- Usa formato Markdown con encabezados jerárquicos (# ## ###)
+- Agrupa las funcionalidades de forma lógica (no como lista simple de tareas)
+- Sintetiza y enriquece el contenido: no copies literalmente las descripciones, elabora el contexto funcional
+- Incluye al inicio: título del documento, fecha, versión y resumen ejecutivo
+- Al final: tabla resumen con los work items incluidos (ID, tipo, título)
+- El resultado debe ser útil como documento independiente de Azure DevOps
+
+Genera el documento ahora:"""
+
+                            payload = {
+                                "model": st.session_state.model,
+                                "messages": [{"role": "user", "content": prompt_doc_func}]
+                            }
+                            if st.session_state.include_temp:
+                                payload["temperature"] = st.session_state.temperature
+                            if st.session_state.include_tokens:
+                                payload["max_tokens"] = st.session_state.max_tokens
+
+                            with st.spinner(f"🤖 Frida está generando documentación desde {len(items_doc)} tareas..."):
+                                resultado_doc_func = call_ia(payload)
+
+                            st.session_state['analisis_resultado_doc_func'] = resultado_doc_func
+                            st.session_state['analisis_doc_num_items'] = len(items_doc)
+                            st.session_state['analisis_doc_tipos'] = tipos_sel_b
+
+                if st.session_state.get('analisis_resultado_doc_func'):
+                    st.markdown("---")
+                    st.markdown(
+                        f"### 📄 Documento generado "
+                        f"({st.session_state.get('analisis_doc_num_items', 0)} tareas — "
+                        f"{', '.join(st.session_state.get('analisis_doc_tipos', []))})"
+                    )
+                    st.markdown(st.session_state['analisis_resultado_doc_func'])
+
+                    col_dl1, col_dl2 = st.columns(2)
+                    with col_dl1:
+                        st.download_button(
+                            label="⬇️ Descargar documento (.md)",
+                            data=st.session_state['analisis_resultado_doc_func'],
+                            file_name="documentacion_funcional.md",
+                            mime="text/markdown",
+                            key="download_doc_func_md"
+                        )
+                    with col_dl2:
+                        st.download_button(
+                            label="⬇️ Descargar como texto (.txt)",
+                            data=st.session_state['analisis_resultado_doc_func'],
+                            file_name="documentacion_funcional.txt",
+                            mime="text/plain",
+                            key="download_doc_func_txt"
+                        )
 
     # ================= TAB 3: ANÁLISIS DOCUMENTOS =================
 with tab_doc:
