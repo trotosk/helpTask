@@ -134,7 +134,8 @@ WORKITEM_FIELD_MAPPING = {
         "riesgos": {"azure_field": "Custom.Riesgos_US", "enabled": True},
         "value_area": {"azure_field": "Microsoft.VSTS.Common.ValueArea", "enabled": True},
         "team": {"azure_field": "Custom.User_Story_Team", "enabled": True},
-        "source": {"azure_field": "Custom.Source", "enabled": True}
+        "source": {"azure_field": "Custom.Source", "enabled": True},
+        "tags": {"azure_field": "System.Tags", "enabled": False}
     },
     "Feature": {
         "titulo": {"azure_field": "System.Title", "enabled": True},
@@ -144,7 +145,8 @@ WORKITEM_FIELD_MAPPING = {
         "riesgos": {"azure_field": "Custom.Riesgos_feature", "enabled": True},
         "value_area": {"azure_field": "Microsoft.VSTS.Common.ValueArea", "enabled": True},
         "team": {"azure_field": "Custom.Team", "enabled": True},
-        "source": {"azure_field": "Custom.Source", "enabled": True}
+        "source": {"azure_field": "Custom.Source", "enabled": True},
+        "tags": {"azure_field": "System.Tags", "enabled": False}
     },
     "Epic": {
         "titulo": {"azure_field": "System.Title", "enabled": True},
@@ -154,7 +156,8 @@ WORKITEM_FIELD_MAPPING = {
         "riesgos": {"azure_field": "Custom.Riesgos", "enabled": True},
         "value_area": {"azure_field": "", "enabled": False},  # No existe en Azure
         "team": {"azure_field": "", "enabled": False},  # No existe en Azure
-        "source": {"azure_field": "", "enabled": False}  # No existe en Azure
+        "source": {"azure_field": "", "enabled": False},  # No existe en Azure
+        "tags": {"azure_field": "System.Tags", "enabled": False}
     },
     "Bug": {
         "titulo": {"azure_field": "System.Title", "enabled": True},
@@ -164,7 +167,8 @@ WORKITEM_FIELD_MAPPING = {
         "riesgos": {"azure_field": "Custom.Riesgos", "enabled": True},
         "value_area": {"azure_field": "Microsoft.VSTS.Common.ValueArea", "enabled": True},
         "team": {"azure_field": "Custom.Team", "enabled": True},
-        "source": {"azure_field": "Custom.Source", "enabled": True}
+        "source": {"azure_field": "Custom.Source", "enabled": True},
+        "tags": {"azure_field": "System.Tags", "enabled": False}
     },
     "Task": {
         "titulo": {"azure_field": "System.Title", "enabled": True},
@@ -174,7 +178,8 @@ WORKITEM_FIELD_MAPPING = {
         "riesgos": {"azure_field": "Custom.Riesgos", "enabled": True},
         "value_area": {"azure_field": "Microsoft.VSTS.Common.ValueArea", "enabled": True},
         "team": {"azure_field": "Custom.Team", "enabled": True},
-        "source": {"azure_field": "Custom.Source", "enabled": True}
+        "source": {"azure_field": "Custom.Source", "enabled": True},
+        "tags": {"azure_field": "System.Tags", "enabled": False}
     }
 }
 
@@ -3084,7 +3089,8 @@ IMPORTANTE: Además de todo lo anterior, debes devolver AL FINAL de tu respuesta
     "riesgos": "Riesgos potenciales en formato HTML. Si generaste una tabla de riesgos, conviértela a HTML. Si no hay, cadena vacía.",
     "team": "Equipo responsable sugerido (si aplica, sino vacío)",
     "source": "Origen de la tarea (si aplica, sino vacío)",
-    "value_area": "Una de estas opciones: Business, Architectural, Design, Development"
+    "value_area": "Una de estas opciones: Business, Architectural, Design, Development",
+    "tags": "Tags relevantes separados por punto y coma (ej: Frontend; API; Priority1). Si no aplica, cadena vacía."
 }
 ```
 
@@ -3203,14 +3209,15 @@ REGLAS CRÍTICAS:
                                 'riesgos': data.get('riesgos', ''),
                                 'team': data.get('team', ''),
                                 'source': data.get('source', ''),
-                                'value_area': data.get('value_area', 'Business')
+                                'value_area': data.get('value_area', 'Business'),
+                                'tags': data.get('tags', '')
                             }
 
                             # Actualizar también las claves de los widgets directamente,
                             # porque Streamlit ignora el parámetro `value=` si la clave
                             # ya existe en session_state (que es el caso en reruns).
                             for campo in ['titulo', 'descripcion', 'acceptance_criteria',
-                                          'dependencies', 'riesgos', 'team', 'source', 'value_area']:
+                                          'dependencies', 'riesgos', 'team', 'source', 'value_area', 'tags']:
                                 st.session_state[f'value_{campo}'] = st.session_state.workitem_data[campo]
                             st.session_state.workitem_generated = True
                             st.success("✅ Campos generados correctamente. Revísalos abajo y modifícalos si es necesario.")
@@ -3319,7 +3326,8 @@ REGLAS CRÍTICAS:
                 'riesgos': 'Riesgos',
                 'team': 'Team',
                 'source': 'Source',
-                'value_area': 'Value Area'
+                'value_area': 'Value Area',
+                'tags': 'Tags'
             }
 
             # Campos con sus valores
@@ -3664,6 +3672,48 @@ REGLAS CRÍTICAS:
                 "enabled": va_enabled
             }
             field_values[field_name] = va_value if va_enabled else ""
+
+            # Tags
+            field_name = 'tags'
+            mapping = st.session_state.current_field_mappings.get(field_name, {"azure_field": "System.Tags", "enabled": False})
+
+            col_check, col_content = st.columns([0.5, 10])
+            with col_check:
+                tags_enabled = st.checkbox(
+                    "Habilitar",
+                    value=mapping.get('enabled', False),
+                    key=f"enable_{field_name}",
+                    label_visibility="collapsed"
+                )
+            with col_content:
+                col_label, col_azure, col_value = st.columns([2, 3, 5])
+                with col_label:
+                    st.markdown(f"**{field_labels[field_name]}**")
+                with col_azure:
+                    tags_azure_field = st.text_input(
+                        "Campo Azure",
+                        value=mapping.get('azure_field', 'System.Tags'),
+                        key=f"azure_{field_name}",
+                        label_visibility="collapsed",
+                        placeholder="System.Tags",
+                        disabled=not tags_enabled
+                    )
+                with col_value:
+                    tags_value = st.text_input(
+                        "Valor",
+                        value=st.session_state.workitem_data.get(field_name, ''),
+                        placeholder="Frontend; API; Priority1 (separados por punto y coma)",
+                        key=f"value_{field_name}",
+                        label_visibility="collapsed",
+                        disabled=not tags_enabled,
+                        help="Tags separados por punto y coma (;)"
+                    )
+
+            updated_mappings[field_name] = {
+                "azure_field": tags_azure_field,
+                "enabled": tags_enabled
+            }
+            field_values[field_name] = tags_value if tags_enabled else ""
 
             # Actualizar los mappings en session_state
             st.session_state.current_field_mappings = updated_mappings
