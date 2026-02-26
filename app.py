@@ -1120,6 +1120,102 @@ def obtener_paginas_wiki_recursivo(organization, project, pat, wiki_id, path="/"
         st.session_state.wiki_logs.append(("error", msg))
         return []
 
+def expandir_paginas_padre(organization, project, pat, wiki_id, paginas_padre):
+    """
+    Toma una lista de páginas padre y expande cada una para obtener sus subpáginas.
+    Útil cuando el método estándar solo devuelve páginas padre sin subPages.
+
+    Args:
+        paginas_padre: Lista de páginas obtenidas con el método estándar
+
+    Returns:
+        Lista expandida con todas las páginas y sus subpáginas
+    """
+    if not hasattr(st.session_state, 'wiki_logs'):
+        st.session_state.wiki_logs = []
+
+    todas_las_paginas = []
+
+    st.session_state.wiki_logs.append(("info", f"🔄 Expandiendo {len(paginas_padre)} página(s) padre..."))
+
+    for idx, pagina in enumerate(paginas_padre):
+        # Añadir la página padre
+        todas_las_paginas.append(pagina)
+
+        path = pagina.get('path', '')
+        es_padre = pagina.get('isParentPage', False)
+
+        st.session_state.wiki_logs.append(("info", f"📄 [{idx+1}/{len(paginas_padre)}] {path} (isParent: {es_padre})"))
+
+        # Si es página padre, intentar obtener sus subpáginas
+        if es_padre:
+            # Codificar el path para la URL
+            encoded_path = requests.utils.quote(path, safe='')
+            url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?path={encoded_path}&includeContent=false&recursionLevel=full&api-version=7.1"
+
+            credentials = f":{pat}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Basic {encoded_credentials}"
+            }
+
+            try:
+                response = requests.get(url, headers=headers, timeout=30)
+
+                if response.status_code == 200:
+                    data = response.json()
+
+                    # Función para extraer subpáginas recursivamente
+                    def extraer_subpaginas(page_data, nivel=1):
+                        subpaginas = []
+
+                        if "subPages" in page_data and page_data["subPages"]:
+                            indent = "  " * nivel
+                            st.session_state.wiki_logs.append(("info", f"{indent}└─ {len(page_data['subPages'])} subpágina(s) encontradas"))
+
+                            for subpage in page_data["subPages"]:
+                                subpage_path = subpage.get('path', '')
+                                if subpage_path:
+                                    subpaginas.append({
+                                        "id": subpage.get("id", subpage_path),
+                                        "path": subpage_path,
+                                        "order": subpage.get("order", 0),
+                                        "gitItemPath": subpage.get("gitItemPath", ""),
+                                        "url": subpage.get("url", ""),
+                                        "isParentPage": subpage.get("isParentPage", False),
+                                        "nivel": nivel
+                                    })
+
+                                    indent = "  " * nivel
+                                    st.session_state.wiki_logs.append(("info", f"{indent}  📄 {subpage_path}"))
+
+                                    # Procesar subpáginas de esta subpágina recursivamente
+                                    subpaginas.extend(extraer_subpaginas(subpage, nivel + 1))
+
+                        return subpaginas
+
+                    # Extraer todas las subpáginas
+                    subpaginas = extraer_subpaginas(data, nivel=1)
+                    todas_las_paginas.extend(subpaginas)
+
+                    if subpaginas:
+                        st.session_state.wiki_logs.append(("success", f"  ✅ {len(subpaginas)} subpágina(s) totales añadidas"))
+                    else:
+                        st.session_state.wiki_logs.append(("warning", f"  ⚠️ No se encontraron subpáginas"))
+
+                else:
+                    st.session_state.wiki_logs.append(("warning", f"  ⚠️ HTTP {response.status_code} al obtener subpáginas"))
+
+            except Exception as e:
+                st.session_state.wiki_logs.append(("error", f"  ❌ Error: {str(e)}"))
+        else:
+            st.session_state.wiki_logs.append(("info", f"  └─ No es página padre, se omite"))
+
+    st.session_state.wiki_logs.append(("success", f"✅ Total expandido: {len(todas_las_paginas)} página(s)"))
+    return todas_las_paginas
+
 def obtener_contenido_pagina_wiki(organization, project, pat, wiki_id, page_id):
     """
     Obtiene el contenido de una página específica de la wiki
@@ -2142,29 +2238,44 @@ with tab_devops:
                                 st.rerun()
 
                     with col_btn_b:
-                        if st.button("🔄 Método Recursivo", key="list_pages_recursive", use_container_width=True, help="Hace múltiples llamadas para obtener cada subpágina (más lento pero más completo)"):
+                        if st.button("🔄 Expandir Páginas Padre", key="list_pages_expand", use_container_width=True, help="Primero obtiene páginas padre y luego expande cada una (más lento pero completo)"):
                             # Guardar logs en session_state
                             st.session_state.wiki_logs = []
-                            st.session_state.wiki_logs.append(("info", "🔄 Usando método recursivo (múltiples llamadas a la API)..."))
+                            st.session_state.wiki_logs.append(("info", "🔄 Paso 1: Obteniendo páginas padre..."))
 
-                            with st.spinner("Obteniendo páginas recursivamente..."):
-                                # Usar método recursivo que hace múltiples llamadas
-                                paginas = obtener_paginas_wiki_recursivo(
+                            with st.spinner("Paso 1: Obteniendo páginas padre..."):
+                                # Primero obtener las páginas padre con el método estándar
+                                paginas_padre = obtener_paginas_wiki(
                                     st.session_state.devops_org,
                                     st.session_state.devops_project,
                                     st.session_state.devops_pat,
                                     st.session_state.selected_wiki_id,
-                                    path="/",
-                                    nivel=0,
-                                    max_nivel=10
+                                    recursion_level=1  # Solo primer nivel
                                 )
 
-                            if paginas:
-                                st.session_state.available_wiki_pages = paginas
-                                st.session_state.wiki_logs.append(("success", f"✅ Total: {len(paginas)} página(s) cargadas con método recursivo"))
-                                st.rerun()
+                            if paginas_padre:
+                                st.session_state.wiki_logs.append(("success", f"✅ {len(paginas_padre)} página(s) padre obtenidas"))
+                                st.session_state.wiki_logs.append(("info", "🔄 Paso 2: Expandiendo cada página padre para obtener subpáginas..."))
+
+                                with st.spinner("Paso 2: Expandiendo páginas padre..."):
+                                    # Ahora expandir cada página padre
+                                    paginas_expandidas = expandir_paginas_padre(
+                                        st.session_state.devops_org,
+                                        st.session_state.devops_project,
+                                        st.session_state.devops_pat,
+                                        st.session_state.selected_wiki_id,
+                                        paginas_padre
+                                    )
+
+                                if paginas_expandidas:
+                                    st.session_state.available_wiki_pages = paginas_expandidas
+                                    st.session_state.wiki_logs.append(("success", f"🎉 Proceso completado: {len(paginas_expandidas)} página(s) totales"))
+                                    st.rerun()
+                                else:
+                                    st.session_state.wiki_logs.append(("warning", "⚠️ No se pudieron expandir las páginas padre"))
+                                    st.rerun()
                             else:
-                                st.session_state.wiki_logs.append(("error", "❌ No se encontraron páginas con ningún método"))
+                                st.session_state.wiki_logs.append(("error", "❌ No se encontraron páginas padre. Verifica la conexión."))
                                 st.rerun()
 
                     # Selector de páginas (individual + batch)
