@@ -2111,41 +2111,30 @@ with tab_devops:
                         if st.button("📄 Listar Páginas de esta Wiki"):
                             # Guardar logs en session_state para mostrar en col2
                             st.session_state.wiki_logs = []
-    
-                            with st.spinner("Obteniendo páginas principales..."):
+
+                            with st.spinner("Obteniendo páginas de la wiki (todos los niveles)..."):
+                                # Usar recursionLevel alto para obtener TODA la jerarquía
                                 paginas = obtener_paginas_wiki(
                                     st.session_state.devops_org,
                                     st.session_state.devops_project,
                                     st.session_state.devops_pat,
-                                    st.session_state.selected_wiki_id
+                                    st.session_state.selected_wiki_id,
+                                    recursion_level=10  # Alto para obtener todos los niveles
                                 )
-    
+
                             if paginas:
-                                # Obtener subpáginas para cada página padre
-                                todas_paginas = []
-                                total_principales = len(paginas)
-                                st.session_state.wiki_logs.append(("info", f"📊 Páginas principales: {total_principales}"))
-    
-                                for idx, pagina in enumerate(paginas):
-                                    todas_paginas.append(pagina)
-    
-                                    # Si es página padre, obtener sus subpáginas
-                                    if pagina.get('isParentPage', False):
-                                        with st.spinner(f"📁 Obteniendo subpáginas de {pagina['path']} ({idx+1}/{total_principales})..."):
-                                            subpaginas = obtener_subpaginas_especificas(
-                                                st.session_state.devops_org,
-                                                st.session_state.devops_project,
-                                                st.session_state.devops_pat,
-                                                st.session_state.selected_wiki_id,
-                                                pagina['path']
-                                            )
-    
-                                            if subpaginas:
-                                                st.session_state.wiki_logs.append(("info", f"  └─ {pagina['path']}: +{len(subpaginas)} subpágina(s)"))
-                                                todas_paginas.extend(subpaginas)
-    
-                                st.session_state.available_wiki_pages = todas_paginas
-                                st.session_state.wiki_logs.append(("success", f"✅ Total: {len(todas_paginas)} página(s) ({total_principales} principales + {len(todas_paginas) - total_principales} subpáginas)"))
+                                # Contar niveles por profundidad (número de '/' en el path)
+                                niveles_count = {}
+                                for p in paginas:
+                                    nivel = p['path'].count('/')
+                                    niveles_count[nivel] = niveles_count.get(nivel, 0) + 1
+
+                                st.session_state.available_wiki_pages = paginas
+
+                                # Logs informativos
+                                st.session_state.wiki_logs.append(("success", f"✅ Total: {len(paginas)} página(s) cargadas"))
+                                niveles_str = ", ".join([f"Nivel {n}: {c}" for n, c in sorted(niveles_count.items())])
+                                st.session_state.wiki_logs.append(("info", f"📊 Distribución por niveles: {niveles_str}"))
                                 st.rerun()
                             else:
                                 st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas en esta wiki"))
@@ -2154,30 +2143,63 @@ with tab_devops:
                         # Selector de páginas (individual + batch)
                         if 'available_wiki_pages' in st.session_state and st.session_state.available_wiki_pages:
                             st.markdown("#### Seleccionar páginas para indexar:")
-    
+                            st.info("💡 **Tip**: Al seleccionar una página padre, se incluirán automáticamente todas sus subpáginas")
+
                             # Opción: Seleccionar todas
                             select_all = st.checkbox("Seleccionar todas las páginas", value=False)
-    
+
                             # Lista de checkboxes para páginas
-                            selected_pages = []
-    
+                            selected_pages_raw = []
+
                             if select_all:
-                                selected_pages = st.session_state.available_wiki_pages.copy()
-                                st.info(f"📑 Todas las páginas seleccionadas ({len(selected_pages)})")
+                                selected_pages_raw = st.session_state.available_wiki_pages.copy()
+                                st.info(f"📑 Todas las páginas seleccionadas ({len(selected_pages_raw)})")
                             else:
-                                st.markdown("**Selecciona páginas individualmente:**")
+                                st.markdown("**Selecciona páginas (se muestran con indentación según su nivel):**")
                                 for idx, page in enumerate(st.session_state.available_wiki_pages):
+                                    # Calcular nivel basado en '/' en el path
+                                    nivel = page['path'].count('/') - 1
+                                    indentacion = "　" * nivel  # Espacios amplios para indentación visual
+
+                                    # Indicador si es página padre
+                                    icono = "📁" if page.get('isParentPage', False) else "📄"
+
                                     if st.checkbox(
-                                        f"{page['path']}",
+                                        f"{indentacion}{icono} {page['path']}",
                                         value=False,
                                         key=f"wiki_page_{idx}"
                                     ):
-                                        selected_pages.append(page)
-    
-                            st.session_state.selected_wiki_pages = selected_pages
-    
-                            if selected_pages:
-                                st.success(f"✅ {len(selected_pages)} página(s) seleccionada(s)")
+                                        selected_pages_raw.append(page)
+
+                            # Expandir selección: si una página padre está seleccionada,
+                            # incluir automáticamente todas sus subpáginas
+                            selected_pages_expanded = []
+                            selected_paths = {p['path'] for p in selected_pages_raw}
+
+                            for page in st.session_state.available_wiki_pages:
+                                # Incluir si:
+                                # 1. Está directamente seleccionada, O
+                                # 2. Su path comienza con el path de alguna página seleccionada (es subpágina)
+                                incluir = page['path'] in selected_paths
+                                if not incluir:
+                                    # Verificar si es subpágina de alguna página seleccionada
+                                    for selected_path in selected_paths:
+                                        if page['path'].startswith(selected_path + '/'):
+                                            incluir = True
+                                            break
+                                if incluir:
+                                    selected_pages_expanded.append(page)
+
+                            st.session_state.selected_wiki_pages = selected_pages_expanded
+
+                            if selected_pages_expanded:
+                                if len(selected_pages_raw) != len(selected_pages_expanded):
+                                    st.success(
+                                        f"✅ {len(selected_pages_raw)} página(s) seleccionada(s) manualmente "
+                                        f"→ {len(selected_pages_expanded)} página(s) totales (incluyendo subpáginas)"
+                                    )
+                                else:
+                                    st.success(f"✅ {len(selected_pages_expanded)} página(s) seleccionada(s)")
     
                 with col2:
                     st.markdown("#### ⚙️ Configuración")
