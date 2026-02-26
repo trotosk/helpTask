@@ -1840,6 +1840,384 @@ with tab_devops:
 
     st.markdown("---")
 
+    # ================= CONFIGURACIÓN COMÚN: WORK ITEMS Y WIKI =================
+    if st.session_state.devops_org and st.session_state.devops_project and st.session_state.devops_pat:
+        # Configuración de Work Items
+        with st.expander("🎛️ Filtros y Sincronización de Work Items", expanded=not st.session_state.devops_indexed):
+            col_filtros1, col_filtros2 = st.columns(2)
+
+            with col_filtros1:
+                work_item_types = st.multiselect(
+                    "Tipos de Work Items",
+                    options=["Bug", "User Story", "Task", "Feature", "Epic", "Issue", "Test Case"],
+                    default=["Bug"],
+                    help="Selecciona uno o más tipos"
+                )
+
+                area_path_input = st.text_input(
+                    "Área (opcional)",
+                    value="",
+                    placeholder="ej: Sales\\MySaga POC",
+                    help="Deja vacío para todas las áreas"
+                )
+
+            with col_filtros2:
+                max_items = st.slider(
+                    "Límite de items a traer",
+                    min_value=50,
+                    max_value=1000,
+                    value=200,
+                    step=50,
+                    help="Máximo de work items a sincronizar"
+                )
+
+                top_k_similar = st.slider(
+                    "Items similares a mostrar",
+                    min_value=3,
+                    max_value=10,
+                    value=5,
+                    step=1,
+                    help="Número de items similares para enviar a Frida"
+                )
+
+            st.markdown("---")
+
+            col_btn1, col_btn2 = st.columns([3, 1])
+            with col_btn1:
+                if st.button("🔄 Sincronizar e Indexar Work Items", use_container_width=True, key="sync_workitems_common"):
+                    if not work_item_types or len(work_item_types) == 0:
+                        st.error("❌ Selecciona al menos un tipo de work item")
+                    else:
+                        with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
+                            incidencias = obtener_incidencias_devops(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat,
+                                area_path=area_path_input if area_path_input else None,
+                                work_item_types=work_item_types,
+                                max_items=max_items
+                            )
+
+                        if incidencias:
+                            st.success(f"✅ Se encontraron {len(incidencias)} work items")
+
+                            tipos_count = {}
+                            for inc in incidencias:
+                                tipo = inc['tipo']
+                                tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
+
+                            st.info(f"📊 Distribución: " + ", ".join([f"{t}: {c}" for t, c in tipos_count.items()]))
+
+                            st.session_state.devops_incidencias = incidencias
+
+                            if st.session_state.embedding_model is None:
+                                st.session_state.embedding_model = cargar_modelo_embeddings()
+
+                            embeddings = generar_embeddings_incidencias(
+                                incidencias,
+                                st.session_state.embedding_model
+                            )
+                            st.session_state.devops_embeddings = embeddings
+                            st.session_state.devops_indexed = True
+                            st.session_state.devops_top_k = top_k_similar
+
+                            st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ No se encontraron work items o hubo un error")
+
+            with col_btn2:
+                if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_devops_common"):
+                    st.session_state.devops_incidencias = []
+                    st.session_state.devops_embeddings = None
+                    st.session_state.devops_indexed = False
+                    st.session_state.devops_messages = []
+                    st.success("✅ Cache limpiado")
+                    st.rerun()
+
+        # Estado de indexación de Work Items
+        if st.session_state.devops_indexed:
+            tipos_en_cache = {}
+            for inc in st.session_state.devops_incidencias:
+                tipo = inc['tipo']
+                tipos_en_cache[tipo] = tipos_en_cache.get(tipo, 0) + 1
+
+            tipos_str = ", ".join([f"{t} ({c})" for t, c in tipos_en_cache.items()])
+            st.info(f"📊 **{len(st.session_state.devops_incidencias)} work items indexados**: {tipos_str}")
+            st.info(f"🎯 **Top-K configurado**: {st.session_state.get('devops_top_k', 5)} items similares por consulta")
+
+        st.markdown("---")
+
+        # Configuración de Wiki
+        with st.expander("📥 Seleccionar Páginas de Wiki", expanded=not st.session_state.wiki_indexed):
+            col1, col2 = st.columns([2, 1])
+
+            with col1:
+                # Listar wikis disponibles
+                if st.button("🔍 Listar Wikis del Proyecto", key="list_wikis_common"):
+                    with st.spinner("Obteniendo wikis..."):
+                        wikis = obtener_wikis_proyecto(
+                            st.session_state.devops_org,
+                            st.session_state.devops_project,
+                            st.session_state.devops_pat
+                        )
+
+                    if wikis:
+                        st.session_state.available_wikis = wikis
+                        st.success(f"✅ {len(wikis)} wiki(s) encontrada(s)")
+                    else:
+                        st.error("❌ No se encontraron wikis o hubo un error")
+
+                # Selector de wiki
+                if 'available_wikis' in st.session_state and st.session_state.available_wikis:
+                    selected_wiki_idx = st.selectbox(
+                        "Selecciona una Wiki",
+                        options=range(len(st.session_state.available_wikis)),
+                        format_func=lambda i: f"{st.session_state.available_wikis[i]['name']} ({st.session_state.available_wikis[i]['type']})",
+                        key="wiki_selector_common"
+                    )
+
+                    selected_wiki = st.session_state.available_wikis[selected_wiki_idx]
+                    st.session_state.selected_wiki_id = selected_wiki['id']
+                    st.session_state.selected_wiki_name = selected_wiki['name']
+
+                    st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
+
+                    # Botón para listar páginas
+                    if st.button("📄 Listar Páginas de esta Wiki", key="list_pages_common"):
+                        # Guardar logs en session_state para mostrar en col2
+                        st.session_state.wiki_logs = []
+
+                        with st.spinner("Obteniendo páginas de la wiki (todos los niveles)..."):
+                            # Usar recursionLevel alto para obtener TODA la jerarquía
+                            paginas = obtener_paginas_wiki(
+                                st.session_state.devops_org,
+                                st.session_state.devops_project,
+                                st.session_state.devops_pat,
+                                st.session_state.selected_wiki_id,
+                                recursion_level=10  # Alto para obtener todos los niveles
+                            )
+
+                        if paginas:
+                            # Contar niveles por profundidad (número de '/' en el path)
+                            niveles_count = {}
+                            for p in paginas:
+                                nivel = p['path'].count('/')
+                                niveles_count[nivel] = niveles_count.get(nivel, 0) + 1
+
+                            st.session_state.available_wiki_pages = paginas
+
+                            # Logs informativos
+                            st.session_state.wiki_logs.append(("success", f"✅ Total: {len(paginas)} página(s) cargadas"))
+                            niveles_str = ", ".join([f"Nivel {n}: {c}" for n, c in sorted(niveles_count.items())])
+                            st.session_state.wiki_logs.append(("info", f"📊 Distribución por niveles: {niveles_str}"))
+                            st.rerun()
+                        else:
+                            st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas en esta wiki"))
+                            st.rerun()
+
+                    # Selector de páginas (individual + batch)
+                    if 'available_wiki_pages' in st.session_state and st.session_state.available_wiki_pages:
+                        st.markdown("#### Seleccionar páginas para indexar:")
+                        st.info("💡 **Tip**: Al seleccionar una página padre, se incluirán automáticamente todas sus subpáginas")
+
+                        # Opción: Seleccionar todas
+                        select_all = st.checkbox("Seleccionar todas las páginas", value=False, key="select_all_common")
+
+                        # Lista de checkboxes para páginas
+                        selected_pages_raw = []
+
+                        if select_all:
+                            selected_pages_raw = st.session_state.available_wiki_pages.copy()
+                            st.info(f"📑 Todas las páginas seleccionadas ({len(selected_pages_raw)})")
+                        else:
+                            st.markdown("**Selecciona páginas (se muestran con indentación según su nivel):**")
+                            for idx, page in enumerate(st.session_state.available_wiki_pages):
+                                # Calcular nivel basado en '/' en el path
+                                nivel = page['path'].count('/') - 1
+                                indentacion = "　" * nivel  # Espacios amplios para indentación visual
+
+                                # Indicador si es página padre
+                                icono = "📁" if page.get('isParentPage', False) else "📄"
+
+                                if st.checkbox(
+                                    f"{indentacion}{icono} {page['path']}",
+                                    value=False,
+                                    key=f"wiki_page_common_{idx}"
+                                ):
+                                    selected_pages_raw.append(page)
+
+                        # Expandir selección: si una página padre está seleccionada,
+                        # incluir automáticamente todas sus subpáginas
+                        selected_pages_expanded = []
+                        selected_paths = {p['path'] for p in selected_pages_raw}
+
+                        for page in st.session_state.available_wiki_pages:
+                            # Incluir si:
+                            # 1. Está directamente seleccionada, O
+                            # 2. Su path comienza con el path de alguna página seleccionada (es subpágina)
+                            incluir = page['path'] in selected_paths
+                            if not incluir:
+                                # Verificar si es subpágina de alguna página seleccionada
+                                for selected_path in selected_paths:
+                                    if page['path'].startswith(selected_path + '/'):
+                                        incluir = True
+                                        break
+                            if incluir:
+                                selected_pages_expanded.append(page)
+
+                        st.session_state.selected_wiki_pages = selected_pages_expanded
+
+                        if selected_pages_expanded:
+                            if len(selected_pages_raw) != len(selected_pages_expanded):
+                                st.success(
+                                    f"✅ {len(selected_pages_raw)} página(s) seleccionada(s) manualmente "
+                                    f"→ {len(selected_pages_expanded)} página(s) totales (incluyendo subpáginas)"
+                                )
+                            else:
+                                st.success(f"✅ {len(selected_pages_expanded)} página(s) seleccionada(s)")
+
+            with col2:
+                st.markdown("#### ⚙️ Configuración")
+                wiki_chunk_size = st.slider(
+                    "Tamaño de fragmentos",
+                    min_value=500,
+                    max_value=4000,
+                    value=1000,
+                    step=100,
+                    help="Tamaño de cada fragmento de las páginas Wiki",
+                    key="wiki_chunk_size_common"
+                )
+
+                wiki_top_k = st.slider(
+                    "Fragmentos relevantes",
+                    min_value=3,
+                    max_value=10,
+                    value=5,
+                    step=1,
+                    help="Número de fragmentos a usar como contexto",
+                    key="wiki_top_k_common"
+                )
+
+                st.markdown("---")
+                st.markdown("#### 📊 Logs y Debug")
+
+                # Mostrar logs guardados
+                if hasattr(st.session_state, 'wiki_logs') and st.session_state.wiki_logs:
+                    for log_type, log_message in st.session_state.wiki_logs:
+                        if log_type == "info":
+                            st.info(log_message)
+                        elif log_type == "success":
+                            st.success(log_message)
+                        elif log_type == "warning":
+                            st.warning(log_message)
+                        elif log_type == "error":
+                            st.error(log_message)
+                else:
+                    st.text("No hay logs disponibles")
+
+            st.markdown("---")
+
+            # Botones de acción
+            col_btn1, col_btn2 = st.columns([3, 1])
+
+            with col_btn1:
+                if st.button("🔄 Procesar e Indexar Páginas", use_container_width=True, key="procesar_wiki_btn_common"):
+                    if not hasattr(st.session_state, 'selected_wiki_pages') or len(st.session_state.selected_wiki_pages) == 0:
+                        st.error("❌ Debes seleccionar al menos una página de la wiki")
+                    else:
+                        # Procesar cada página seleccionada
+                        paginas_contenido = []
+                        progress_bar = st.progress(0)
+                        total_pages = len(st.session_state.selected_wiki_pages)
+
+                        for idx, page in enumerate(st.session_state.selected_wiki_pages):
+                            progress_bar.progress((idx + 1) / total_pages)
+
+                            with st.spinner(f"Descargando {page['path']}..."):
+                                contenido_page = obtener_contenido_pagina_wiki(
+                                    st.session_state.devops_org,
+                                    st.session_state.devops_project,
+                                    st.session_state.devops_pat,
+                                    st.session_state.selected_wiki_id,
+                                    page['id']
+                                )
+
+                            if contenido_page and contenido_page['content']:
+                                # Limpiar markdown
+                                texto_limpio = limpiar_markdown(contenido_page['content'])
+
+                                # Dividir en chunks
+                                chunks = dividir_en_chunks(texto_limpio, chunk_size=wiki_chunk_size)
+
+                                paginas_contenido.append({
+                                    'id': page['id'],
+                                    'path': page['path'],
+                                    'chunks': chunks
+                                })
+
+                        if paginas_contenido:
+                            # Crear lista plana de todos los chunks con referencias
+                            todos_chunks = []
+                            referencias = []
+
+                            for pagina in paginas_contenido:
+                                for chunk in pagina['chunks']:
+                                    todos_chunks.append(chunk)
+                                    referencias.append({
+                                        'id': pagina['id'],
+                                        'path': pagina['path']
+                                    })
+
+                            # Generar embeddings
+                            with st.spinner("Generando embeddings..."):
+                                if st.session_state.embedding_model is None:
+                                    st.session_state.embedding_model = cargar_modelo_embeddings()
+
+                                embeddings = st.session_state.embedding_model.encode(
+                                    todos_chunks,
+                                    convert_to_tensor=True,
+                                    show_progress_bar=True
+                                )
+
+                            st.session_state.wiki_paginas_contenido = paginas_contenido
+                            st.session_state.wiki_embeddings = embeddings
+                            st.session_state.wiki_referencias = referencias
+                            st.session_state.wiki_chunks = todos_chunks
+                            st.session_state.wiki_indexed = True
+                            st.session_state.wiki_top_k = wiki_top_k
+
+                            st.success("✅ Wiki indexada correctamente")
+                            st.rerun()
+                        else:
+                            st.error("❌ No se pudo procesar ninguna página")
+
+            with col_btn2:
+                if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_wiki_common"):
+                    st.session_state.wiki_paginas_contenido = []
+                    st.session_state.wiki_embeddings = None
+                    st.session_state.wiki_referencias = []
+                    st.session_state.wiki_chunks = []
+                    st.session_state.wiki_indexed = False
+                    st.session_state.wiki_messages = []
+                    if 'available_wikis' in st.session_state:
+                        del st.session_state.available_wikis
+                    if 'available_wiki_pages' in st.session_state:
+                        del st.session_state.available_wiki_pages
+                    if 'selected_wiki_pages' in st.session_state:
+                        del st.session_state.selected_wiki_pages
+                    st.success("✅ Wiki limpiada")
+                    st.rerun()
+
+        # Estado de indexación de Wiki
+        if st.session_state.wiki_indexed:
+            total_chunks = len(st.session_state.wiki_chunks)
+            total_pages = len(st.session_state.wiki_paginas_contenido)
+            st.info(f"📚 **Wiki indexada**: {st.session_state.selected_wiki_name} - {total_pages} páginas, {total_chunks} fragmentos")
+            st.info(f"🎯 **Top-K configurado**: {st.session_state.get('wiki_top_k', 5)} fragmentos por consulta")
+
+        st.markdown("---")
+
     # Crear subtabs
     subtab_workitems, subtab_wiki, subtab_crear_wiki, subtab_crear_tarea, subtab_analisis = st.tabs([
         "📋 Consulta Work Items",
@@ -1851,116 +2229,12 @@ with tab_devops:
 
     # ================= SUBTAB 1: CONSULTA WORK ITEMS =================
     with subtab_workitems:
-        # Verificar conexión
-        if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
-            st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
+        st.subheader("💬 Consultas sobre Work Items")
+
+        # Chat de consultas
+        if not st.session_state.devops_indexed:
+            st.info("ℹ️ Primero sincroniza e indexa los work items usando la sección '🎛️ Filtros y Sincronización de Work Items' arriba")
         else:
-            # Configuración de sincronización
-            with st.expander("🎛️ Filtros y Sincronización de Work Items", expanded=not st.session_state.devops_indexed):
-                col_filtros1, col_filtros2 = st.columns(2)
-    
-                with col_filtros1:
-                    work_item_types = st.multiselect(
-                        "Tipos de Work Items",
-                        options=["Bug", "User Story", "Task", "Feature", "Epic", "Issue", "Test Case"],
-                        default=["Bug"],
-                        help="Selecciona uno o más tipos"
-                    )
-    
-                    area_path_input = st.text_input(
-                        "Área (opcional)",
-                        value="",
-                        placeholder="ej: Sales\\MySaga POC",
-                        help="Deja vacío para todas las áreas"
-                    )
-    
-                with col_filtros2:
-                    max_items = st.slider(
-                        "Límite de items a traer",
-                        min_value=50,
-                        max_value=1000,
-                        value=200,
-                        step=50,
-                        help="Máximo de work items a sincronizar"
-                    )
-    
-                    top_k_similar = st.slider(
-                        "Items similares a mostrar",
-                        min_value=3,
-                        max_value=10,
-                        value=5,
-                        step=1,
-                        help="Número de items similares para enviar a Frida"
-                    )
-    
-                st.markdown("---")
-    
-                col_btn1, col_btn2 = st.columns([3, 1])
-                with col_btn1:
-                    if st.button("🔄 Sincronizar e Indexar Work Items", use_container_width=True):
-                        if not work_item_types or len(work_item_types) == 0:
-                            st.error("❌ Selecciona al menos un tipo de work item")
-                        else:
-                            with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
-                                incidencias = obtener_incidencias_devops(
-                                    st.session_state.devops_org,
-                                    st.session_state.devops_project,
-                                    st.session_state.devops_pat,
-                                    area_path=area_path_input if area_path_input else None,
-                                    work_item_types=work_item_types,
-                                    max_items=max_items
-                                )
-    
-                            if incidencias:
-                                st.success(f"✅ Se encontraron {len(incidencias)} work items")
-    
-                                tipos_count = {}
-                                for inc in incidencias:
-                                    tipo = inc['tipo']
-                                    tipos_count[tipo] = tipos_count.get(tipo, 0) + 1
-    
-                                st.info(f"📊 Distribución: " + ", ".join([f"{t}: {c}" for t, c in tipos_count.items()]))
-    
-                                st.session_state.devops_incidencias = incidencias
-    
-                                if st.session_state.embedding_model is None:
-                                    st.session_state.embedding_model = cargar_modelo_embeddings()
-    
-                                embeddings = generar_embeddings_incidencias(
-                                    incidencias,
-                                    st.session_state.embedding_model
-                                )
-                                st.session_state.devops_embeddings = embeddings
-                                st.session_state.devops_indexed = True
-                                st.session_state.devops_top_k = top_k_similar
-    
-                                st.success("✅ Indexación completada. Ahora puedes hacer consultas.")
-                                st.rerun()
-                            else:
-                                st.warning("⚠️ No se encontraron work items o hubo un error")
-    
-                with col_btn2:
-                    if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_devops"):
-                        st.session_state.devops_incidencias = []
-                        st.session_state.devops_embeddings = None
-                        st.session_state.devops_indexed = False
-                        st.session_state.devops_messages = []
-                        st.success("✅ Cache limpiado")
-                        st.rerun()
-    
-            # Estado de indexación
-            if st.session_state.devops_indexed:
-                tipos_en_cache = {}
-                for inc in st.session_state.devops_incidencias:
-                    tipo = inc['tipo']
-                    tipos_en_cache[tipo] = tipos_en_cache.get(tipo, 0) + 1
-    
-                tipos_str = ", ".join([f"{t} ({c})" for t, c in tipos_en_cache.items()])
-                st.info(f"📊 **{len(st.session_state.devops_incidencias)} work items indexados**: {tipos_str}")
-                st.info(f"🎯 **Top-K configurado**: {st.session_state.get('devops_top_k', 5)} items similares por consulta")
-    
-            # Chat de consultas
-            st.markdown("---")
     
             col_chat, col_stats = st.columns([2, 1])
     
@@ -2065,279 +2339,12 @@ with tab_devops:
 
     # ================= SUBTAB 2: CONSULTA WIKI =================
     with subtab_wiki:
-        st.subheader("📚 Consulta Wiki de Azure DevOps")
-        st.markdown("Indexa páginas de la Wiki y haz consultas sobre su contenido")
+        st.subheader("💬 Consultas sobre la Wiki")
 
-        # Verificar configuración de Azure DevOps
-        if not st.session_state.devops_pat or not st.session_state.devops_org or not st.session_state.devops_project:
-            st.warning("⚠️ Primero configura la conexión a Azure DevOps en la sección de Configuración arriba")
+        # Chat de consultas Wiki
+        if not st.session_state.wiki_indexed:
+            st.info("ℹ️ Primero selecciona e indexa páginas de la Wiki usando la sección '📥 Seleccionar Páginas de Wiki' arriba")
         else:
-            # Sección de carga de Wiki
-            with st.expander("📥 Seleccionar Páginas de Wiki", expanded=not st.session_state.wiki_indexed):
-                col1, col2 = st.columns([2, 1])
-    
-                with col1:
-                    # Listar wikis disponibles
-                    if st.button("🔍 Listar Wikis del Proyecto"):
-                        with st.spinner("Obteniendo wikis..."):
-                            wikis = obtener_wikis_proyecto(
-                                st.session_state.devops_org,
-                                st.session_state.devops_project,
-                                st.session_state.devops_pat
-                            )
-    
-                        if wikis:
-                            st.session_state.available_wikis = wikis
-                            st.success(f"✅ {len(wikis)} wiki(s) encontrada(s)")
-                        else:
-                            st.error("❌ No se encontraron wikis o hubo un error")
-    
-                    # Selector de wiki
-                    if 'available_wikis' in st.session_state and st.session_state.available_wikis:
-                        selected_wiki_idx = st.selectbox(
-                            "Selecciona una Wiki",
-                            options=range(len(st.session_state.available_wikis)),
-                            format_func=lambda i: f"{st.session_state.available_wikis[i]['name']} ({st.session_state.available_wikis[i]['type']})",
-                            key="wiki_selector"
-                        )
-    
-                        selected_wiki = st.session_state.available_wikis[selected_wiki_idx]
-                        st.session_state.selected_wiki_id = selected_wiki['id']
-                        st.session_state.selected_wiki_name = selected_wiki['name']
-    
-                        st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
-    
-                        # Botón para listar páginas
-                        if st.button("📄 Listar Páginas de esta Wiki"):
-                            # Guardar logs en session_state para mostrar en col2
-                            st.session_state.wiki_logs = []
-
-                            with st.spinner("Obteniendo páginas de la wiki (todos los niveles)..."):
-                                # Usar recursionLevel alto para obtener TODA la jerarquía
-                                paginas = obtener_paginas_wiki(
-                                    st.session_state.devops_org,
-                                    st.session_state.devops_project,
-                                    st.session_state.devops_pat,
-                                    st.session_state.selected_wiki_id,
-                                    recursion_level=10  # Alto para obtener todos los niveles
-                                )
-
-                            if paginas:
-                                # Contar niveles por profundidad (número de '/' en el path)
-                                niveles_count = {}
-                                for p in paginas:
-                                    nivel = p['path'].count('/')
-                                    niveles_count[nivel] = niveles_count.get(nivel, 0) + 1
-
-                                st.session_state.available_wiki_pages = paginas
-
-                                # Logs informativos
-                                st.session_state.wiki_logs.append(("success", f"✅ Total: {len(paginas)} página(s) cargadas"))
-                                niveles_str = ", ".join([f"Nivel {n}: {c}" for n, c in sorted(niveles_count.items())])
-                                st.session_state.wiki_logs.append(("info", f"📊 Distribución por niveles: {niveles_str}"))
-                                st.rerun()
-                            else:
-                                st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas en esta wiki"))
-                                st.rerun()
-    
-                        # Selector de páginas (individual + batch)
-                        if 'available_wiki_pages' in st.session_state and st.session_state.available_wiki_pages:
-                            st.markdown("#### Seleccionar páginas para indexar:")
-                            st.info("💡 **Tip**: Al seleccionar una página padre, se incluirán automáticamente todas sus subpáginas")
-
-                            # Opción: Seleccionar todas
-                            select_all = st.checkbox("Seleccionar todas las páginas", value=False)
-
-                            # Lista de checkboxes para páginas
-                            selected_pages_raw = []
-
-                            if select_all:
-                                selected_pages_raw = st.session_state.available_wiki_pages.copy()
-                                st.info(f"📑 Todas las páginas seleccionadas ({len(selected_pages_raw)})")
-                            else:
-                                st.markdown("**Selecciona páginas (se muestran con indentación según su nivel):**")
-                                for idx, page in enumerate(st.session_state.available_wiki_pages):
-                                    # Calcular nivel basado en '/' en el path
-                                    nivel = page['path'].count('/') - 1
-                                    indentacion = "　" * nivel  # Espacios amplios para indentación visual
-
-                                    # Indicador si es página padre
-                                    icono = "📁" if page.get('isParentPage', False) else "📄"
-
-                                    if st.checkbox(
-                                        f"{indentacion}{icono} {page['path']}",
-                                        value=False,
-                                        key=f"wiki_page_{idx}"
-                                    ):
-                                        selected_pages_raw.append(page)
-
-                            # Expandir selección: si una página padre está seleccionada,
-                            # incluir automáticamente todas sus subpáginas
-                            selected_pages_expanded = []
-                            selected_paths = {p['path'] for p in selected_pages_raw}
-
-                            for page in st.session_state.available_wiki_pages:
-                                # Incluir si:
-                                # 1. Está directamente seleccionada, O
-                                # 2. Su path comienza con el path de alguna página seleccionada (es subpágina)
-                                incluir = page['path'] in selected_paths
-                                if not incluir:
-                                    # Verificar si es subpágina de alguna página seleccionada
-                                    for selected_path in selected_paths:
-                                        if page['path'].startswith(selected_path + '/'):
-                                            incluir = True
-                                            break
-                                if incluir:
-                                    selected_pages_expanded.append(page)
-
-                            st.session_state.selected_wiki_pages = selected_pages_expanded
-
-                            if selected_pages_expanded:
-                                if len(selected_pages_raw) != len(selected_pages_expanded):
-                                    st.success(
-                                        f"✅ {len(selected_pages_raw)} página(s) seleccionada(s) manualmente "
-                                        f"→ {len(selected_pages_expanded)} página(s) totales (incluyendo subpáginas)"
-                                    )
-                                else:
-                                    st.success(f"✅ {len(selected_pages_expanded)} página(s) seleccionada(s)")
-    
-                with col2:
-                    st.markdown("#### ⚙️ Configuración")
-                    wiki_chunk_size = st.slider(
-                        "Tamaño de fragmentos",
-                        min_value=500,
-                        max_value=4000,
-                        value=1000,
-                        step=100,
-                        help="Tamaño de cada fragmento de las páginas Wiki"
-                    )
-    
-                    wiki_top_k = st.slider(
-                        "Fragmentos relevantes",
-                        min_value=3,
-                        max_value=10,
-                        value=5,
-                        step=1,
-                        help="Número de fragmentos a usar como contexto"
-                    )
-    
-                    st.markdown("---")
-                    st.markdown("#### 📊 Logs y Debug")
-    
-                    # Mostrar logs guardados
-                    if hasattr(st.session_state, 'wiki_logs') and st.session_state.wiki_logs:
-                        for log_type, log_message in st.session_state.wiki_logs:
-                            if log_type == "info":
-                                st.info(log_message)
-                            elif log_type == "success":
-                                st.success(log_message)
-                            elif log_type == "warning":
-                                st.warning(log_message)
-                            elif log_type == "error":
-                                st.error(log_message)
-                    else:
-                        st.text("No hay logs disponibles")
-    
-                st.markdown("---")
-    
-                # Botones de acción
-                col_btn1, col_btn2 = st.columns([3, 1])
-    
-                with col_btn1:
-                    if st.button("🔄 Procesar e Indexar Páginas", use_container_width=True, key="procesar_wiki_btn"):
-                        if not hasattr(st.session_state, 'selected_wiki_pages') or len(st.session_state.selected_wiki_pages) == 0:
-                            st.error("❌ Debes seleccionar al menos una página de la wiki")
-                        else:
-                            # Procesar cada página seleccionada
-                            paginas_contenido = []
-                            progress_bar = st.progress(0)
-                            total_pages = len(st.session_state.selected_wiki_pages)
-    
-                            for idx, page in enumerate(st.session_state.selected_wiki_pages):
-                                progress_bar.progress((idx + 1) / total_pages)
-    
-                                with st.spinner(f"Descargando {page['path']}..."):
-                                    contenido_page = obtener_contenido_pagina_wiki(
-                                        st.session_state.devops_org,
-                                        st.session_state.devops_project,
-                                        st.session_state.devops_pat,
-                                        st.session_state.selected_wiki_id,
-                                        page['id']
-                                    )
-    
-                                if contenido_page and contenido_page['content']:
-                                    # Limpiar markdown
-                                    texto_limpio = limpiar_markdown(contenido_page['content'])
-    
-                                    # Dividir en chunks
-                                    chunks = dividir_en_chunks(texto_limpio, chunk_size=wiki_chunk_size)
-    
-                                    paginas_contenido.append({
-                                        'id': page['id'],
-                                        'path': page['path'],
-                                        'chunks': chunks
-                                    })
-    
-                            if paginas_contenido:
-                                st.success(f"✅ {len(paginas_contenido)} página(s) procesada(s)")
-    
-                                # Cargar modelo si no está cargado
-                                if st.session_state.embedding_model is None:
-                                    st.session_state.embedding_model = cargar_modelo_embeddings()
-    
-                                # Generar embeddings
-                                embeddings, referencias = generar_embeddings_wiki(
-                                    paginas_contenido,
-                                    st.session_state.embedding_model
-                                )
-    
-                                # Extraer lista plana de chunks para búsqueda
-                                todos_chunks = []
-                                for pagina in paginas_contenido:
-                                    todos_chunks.extend(pagina['chunks'])
-    
-                                # Guardar en session_state
-                                st.session_state.wiki_paginas_contenido = paginas_contenido
-                                st.session_state.wiki_embeddings = embeddings
-                                st.session_state.wiki_referencias = referencias
-                                st.session_state.wiki_chunks = todos_chunks
-                                st.session_state.wiki_indexed = True
-                                st.session_state.wiki_top_k = wiki_top_k
-    
-                                total_chunks = sum(len(p['chunks']) for p in paginas_contenido)
-                                st.success(f"✅ Wiki indexada: {len(paginas_contenido)} páginas, {total_chunks} fragmentos")
-                                st.rerun()
-                            else:
-                                st.error("❌ No se pudo procesar ninguna página")
-    
-                with col_btn2:
-                    if st.button("🗑️ Limpiar", use_container_width=True, key="limpiar_wiki"):
-                        st.session_state.wiki_paginas_contenido = []
-                        st.session_state.wiki_embeddings = None
-                        st.session_state.wiki_referencias = []
-                        st.session_state.wiki_chunks = []
-                        st.session_state.wiki_indexed = False
-                        st.session_state.wiki_messages = []
-                        if 'available_wikis' in st.session_state:
-                            del st.session_state.available_wikis
-                        if 'available_wiki_pages' in st.session_state:
-                            del st.session_state.available_wiki_pages
-                        if 'selected_wiki_pages' in st.session_state:
-                            del st.session_state.selected_wiki_pages
-                        st.success("✅ Wiki limpiada")
-                        st.rerun()
-    
-            # Estado de indexación
-            if st.session_state.wiki_indexed:
-                total_chunks = len(st.session_state.wiki_chunks)
-                total_pages = len(st.session_state.wiki_paginas_contenido)
-                st.info(f"📚 **Wiki indexada**: {st.session_state.selected_wiki_name} - {total_pages} páginas, {total_chunks} fragmentos")
-                st.info(f"🎯 **Top-K configurado**: {st.session_state.get('wiki_top_k', 5)} fragmentos por consulta")
-    
-            st.markdown("---")
-    
-            # Chat de consultas Wiki
-            st.subheader("💬 Consultas sobre la Wiki")
     
             for m in st.session_state.wiki_messages:
                 with st.chat_message(m["role"]):
