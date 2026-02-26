@@ -107,6 +107,7 @@ defaults = {
     # Estado para Crear Wiki desde Documento
     "wiki_create_doc_content": "",
     "wiki_create_doc_filename": "",
+    "wiki_create_imagenes": [],  # Lista de imágenes extraídas del documento
     "wiki_create_estructura_propuesta": None,
     "wiki_create_estructura_editada": None,
     "wiki_create_modo": "nueva",  # "nueva" o "extender"
@@ -646,9 +647,19 @@ def construir_contexto_devops(incidencias_similares):
 # HELPERS PARA DOCUMENTOS
 # ==================================================
 
-def leer_docx_desde_bytes(file_bytes):
+def leer_docx_desde_bytes(file_bytes, extraer_imagenes=False):
     """Lee un documento Word desde bytes y convierte a Markdown preservando tablas,
-    encabezados y formato (negrita/cursiva), manteniendo el orden original del documento."""
+    encabezados y formato (negrita/cursiva), manteniendo el orden original del documento.
+
+    Args:
+        file_bytes: Bytes del documento DOCX
+        extraer_imagenes: Si es True, también extrae imágenes y devuelve tupla (markdown, imagenes)
+
+    Returns:
+        Si extraer_imagenes=False: str con markdown
+        Si extraer_imagenes=True: tuple (markdown: str, imagenes: list)
+            donde imagenes es una lista de dict con 'data' (bytes), 'name', 'position' (índice en markdown)
+    """
     try:
         from docx.text.paragraph import Paragraph as DocxParagraph
         from docx.table import Table as DocxTable
@@ -700,10 +711,64 @@ def leer_docx_desde_bytes(file_bytes):
 
         # Iterar los elementos del body en orden de documento (párrafos y tablas intercalados)
         lineas = []
+        imagenes = []
+        imagen_counter = 0
+
         for child in doc.element.body:
             tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
             if tag == 'p':
                 para = DocxParagraph(child, doc)
+
+                # Buscar imágenes en este párrafo si extraer_imagenes está activo
+                if extraer_imagenes:
+                    # Buscar elementos drawing/picture en el párrafo
+                    for run in para.runs:
+                        # Los drawings contienen imágenes
+                        inline_shapes = run.element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing')
+
+                        for drawing in inline_shapes:
+                            # Buscar el blip (binary large image or picture)
+                            blips = drawing.findall('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
+
+                            for blip in blips:
+                                # Obtener el relationship ID de la imagen
+                                embed_id = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+
+                                if embed_id:
+                                    try:
+                                        # Obtener la imagen del documento
+                                        image_part = doc.part.related_parts[embed_id]
+                                        image_bytes = image_part.blob
+
+                                        # Detectar extensión de la imagen
+                                        content_type = image_part.content_type
+                                        if 'png' in content_type:
+                                            ext = 'png'
+                                        elif 'jpeg' in content_type or 'jpg' in content_type:
+                                            ext = 'jpg'
+                                        elif 'gif' in content_type:
+                                            ext = 'gif'
+                                        else:
+                                            ext = 'png'  # default
+
+                                        imagen_counter += 1
+                                        image_name = f"imagen_{imagen_counter}.{ext}"
+
+                                        # Guardar imagen y su posición
+                                        imagenes.append({
+                                            'data': image_bytes,
+                                            'name': image_name,
+                                            'position': len(lineas),  # Posición actual en las líneas
+                                            'ext': ext
+                                        })
+
+                                        # Insertar placeholder en el texto
+                                        lineas.append(f"{{{{IMAGE_PLACEHOLDER_{imagen_counter}}}}}")
+
+                                    except Exception as e:
+                                        st.warning(f"⚠️ No se pudo extraer una imagen: {str(e)}")
+
+                # Añadir el texto del párrafo
                 md = para_to_md(para)
                 if md:
                     lineas.append(md)
@@ -713,7 +778,12 @@ def leer_docx_desde_bytes(file_bytes):
                 lineas.append(table_to_md(tbl))
                 lineas.append('')
 
-        return '\n\n'.join(l for l in lineas if l is not None)
+        markdown_final = '\n\n'.join(l for l in lineas if l is not None)
+
+        if extraer_imagenes:
+            return markdown_final, imagenes
+        else:
+            return markdown_final
     except Exception as e:
         st.error(f"Error al leer documento: {str(e)}")
         return ""
@@ -1918,6 +1988,105 @@ def actualizar_pagina_wiki_azure(organization, project, pat, wiki_id, path, cont
         st.error(f"❌ Error al actualizar página {path}: {str(e)}")
         return False, None
 
+def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, image_name):
+    """
+    Sube una imagen como attachment a Azure DevOps Wiki
+
+    Args:
+        organization: Organización de Azure DevOps
+        project: Proyecto
+        pat: Personal Access Token
+        wiki_id: ID de la wiki
+        image_bytes: Bytes de la imagen
+        image_name: Nombre del archivo (ej: "imagen1.png")
+
+    Returns:
+        tuple: (success: bool, attachment_url: str or None)
+    """
+    import uuid
+
+    # Generar nombre único para evitar colisiones
+    unique_name = f"{uuid.uuid4().hex[:8]}_{image_name}"
+
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/attachments?name={unique_name}&api-version=7.1"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Authorization": f"Basic {encoded_credentials}",
+        "Content-Type": "application/octet-stream"
+    }
+
+    try:
+        response = requests.post(url, data=image_bytes, headers=headers, timeout=60)
+
+        if response.status_code in [200, 201]:
+            data = response.json()
+            # La URL del attachment está en la respuesta
+            attachment_url = data.get('url', '')
+
+            # Azure DevOps devuelve una URL de API, necesitamos convertirla a URL pública
+            # Formato típico: /.attachments/{hash}/{filename}
+            if 'attachments' in attachment_url:
+                # Extraer la parte del path del attachment
+                parts = attachment_url.split('/attachments/')
+                if len(parts) > 1:
+                    attachment_path = f"/.attachments/{parts[1]}"
+                    return True, attachment_path
+
+            # Si no podemos parsear, devolver la URL completa
+            return True, attachment_url
+        else:
+            st.warning(f"⚠️ Error {response.status_code} al subir imagen {image_name}: {response.text[:200]}")
+            return False, None
+
+    except Exception as e:
+        st.error(f"❌ Error al subir imagen {image_name}: {str(e)}")
+        return False, None
+
+def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat, wiki_id):
+    """
+    Procesa las imágenes extraídas del documento:
+    1. Sube cada imagen a Azure DevOps Wiki como attachment
+    2. Reemplaza los placeholders {{IMAGE_PLACEHOLDER_N}} con ![alt](url)
+
+    Args:
+        markdown: Texto markdown con placeholders
+        imagenes: Lista de dict con 'data', 'name', 'position'
+        organization, project, pat, wiki_id: Credenciales de Azure DevOps
+
+    Returns:
+        str: Markdown con imágenes insertadas
+    """
+    if not imagenes:
+        return markdown
+
+    markdown_procesado = markdown
+
+    for idx, imagen in enumerate(imagenes, 1):
+        placeholder = f"{{{{IMAGE_PLACEHOLDER_{idx}}}}}"
+
+        # Subir imagen a Azure DevOps
+        success, attachment_url = subir_attachment_wiki(
+            organization, project, pat, wiki_id,
+            imagen['data'], imagen['name']
+        )
+
+        if success and attachment_url:
+            # Reemplazar placeholder con markdown de imagen
+            # Usar nombre sin extensión como alt text
+            alt_text = imagen['name'].rsplit('.', 1)[0]
+            imagen_markdown = f"![{alt_text}]({attachment_url})"
+            markdown_procesado = markdown_procesado.replace(placeholder, imagen_markdown)
+            st.info(f"📸 Imagen subida: {imagen['name']} → {attachment_url}")
+        else:
+            # Si falla, remover el placeholder
+            st.warning(f"⚠️ No se pudo subir {imagen['name']}, se omitirá la imagen")
+            markdown_procesado = markdown_procesado.replace(placeholder, "")
+
+    return markdown_procesado
+
 def obtener_estructura_paginas_wiki_existente(organization, project, pat, wiki_id):
     """
     Obtiene la estructura de páginas existentes en la wiki para mostrar al usuario
@@ -2706,19 +2875,39 @@ with tab_devops:
     
                     if uploaded_file:
                         file_ext = uploaded_file.name.split('.')[-1].lower()
-    
+
+                        # Checkbox para incluir imágenes
+                        incluir_imagenes = st.checkbox(
+                            "📸 Incluir imágenes del documento",
+                            value=False,
+                            key="wiki_create_incluir_imagenes",
+                            help="Extrae y sube las imágenes del documento a la Wiki (solo DOCX por ahora)"
+                        )
+
+                        if incluir_imagenes and file_ext == "pdf":
+                            st.warning("⚠️ La extracción de imágenes de PDF aún no está implementada. Solo funciona con archivos .docx")
+
                         if st.button("📖 Procesar Documento", key="procesar_doc_wiki"):
                             file_bytes = uploaded_file.read()
-    
+
                             with st.spinner(f"📖 Leyendo {file_ext.upper()}..."):
                                 if file_ext == "docx":
-                                    contenido = leer_docx_desde_bytes(file_bytes)
+                                    if incluir_imagenes:
+                                        contenido, imagenes = leer_docx_desde_bytes(file_bytes, extraer_imagenes=True)
+                                        st.session_state.wiki_create_imagenes = imagenes
+                                        if imagenes:
+                                            st.info(f"📸 {len(imagenes)} imagen(es) encontradas en el documento")
+                                    else:
+                                        contenido = leer_docx_desde_bytes(file_bytes, extraer_imagenes=False)
+                                        st.session_state.wiki_create_imagenes = []
                                 elif file_ext == "pdf":
                                     contenido = leer_pdf_desde_bytes(file_bytes)
+                                    st.session_state.wiki_create_imagenes = []
                                 else:
                                     st.error("Formato no soportado")
                                     contenido = ""
-    
+                                    st.session_state.wiki_create_imagenes = []
+
                             if contenido:
                                 st.session_state.wiki_create_doc_content = contenido
                                 st.session_state.wiki_create_doc_filename = uploaded_file.name
@@ -2731,10 +2920,14 @@ with tab_devops:
                     if st.session_state.wiki_create_doc_content:
                         st.metric("📄 Documento cargado", st.session_state.wiki_create_doc_filename)
                         st.metric("📝 Tamaño", f"{len(st.session_state.wiki_create_doc_content)} caracteres")
+
+                        if st.session_state.wiki_create_imagenes:
+                            st.metric("📸 Imágenes", f"{len(st.session_state.wiki_create_imagenes)} encontradas")
     
                         if st.button("🗑️ Limpiar documento", key="limpiar_doc_wiki_create"):
                             st.session_state.wiki_create_doc_content = ""
                             st.session_state.wiki_create_doc_filename = ""
+                            st.session_state.wiki_create_imagenes = []
                             st.session_state.wiki_create_estructura_propuesta = None
                             st.session_state.wiki_create_estructura_editada = None
                             st.session_state.wiki_create_ready_to_create = False
@@ -3206,13 +3399,25 @@ with tab_devops:
                                         else:
                                             path = f"{base_path}/{titulo_clean}"
 
+                            # Procesar imágenes si existen
+                            contenido_final = pagina['contenido_markdown']
+                            if st.session_state.wiki_create_imagenes and len(st.session_state.wiki_create_imagenes) > 0:
+                                contenido_final = procesar_imagenes_en_markdown(
+                                    contenido_final,
+                                    st.session_state.wiki_create_imagenes,
+                                    st.session_state.devops_org,
+                                    st.session_state.devops_project,
+                                    st.session_state.devops_pat,
+                                    st.session_state.selected_wiki_id_crear
+                                )
+
                             success, result = crear_pagina_wiki_azure(
                                 st.session_state.devops_org,
                                 st.session_state.devops_project,
                                 st.session_state.devops_pat,
                                 st.session_state.selected_wiki_id_crear,
                                 path,
-                                pagina['contenido_markdown']
+                                contenido_final
                             )
 
                             if success:
