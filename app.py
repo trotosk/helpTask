@@ -904,6 +904,10 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=5)
     Obtiene la lista de páginas de una wiki con toda su jerarquía
     recursion_level: Niveles de profundidad a obtener (default 5 para obtener toda la estructura)
     """
+    # Inicializar logs si no existen
+    if not hasattr(st.session_state, 'wiki_logs'):
+        st.session_state.wiki_logs = []
+
     url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?recursionLevel={recursion_level}&api-version=7.1"
 
     credentials = f":{pat}"
@@ -918,8 +922,8 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=5)
         response = requests.get(url, headers=headers, timeout=30)
 
         if response.status_code == 401:
-            st.error("❌ Error 401: No autorizado para acceder a las páginas de la Wiki")
-            st.info("Verifica que tu PAT tenga permisos de **Wiki (Read)** o **Code (Read)**")
+            st.session_state.wiki_logs.append(("error", "❌ Error 401: No autorizado para acceder a las páginas de la Wiki"))
+            st.session_state.wiki_logs.append(("info", "Verifica que tu PAT tenga permisos de **Wiki (Read)** o **Code (Read)**"))
             return []
 
         response.raise_for_status()
@@ -942,7 +946,7 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=5)
 
         # Verificar si hay páginas
         if not data:
-            st.warning("⚠️ La respuesta de la API está vacía")
+            st.session_state.wiki_logs.append(("warning", "⚠️ La respuesta de la API está vacía"))
             return []
 
         # Función recursiva para aplanar la estructura de páginas
@@ -964,21 +968,27 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=5)
                 })
 
                 # Debug: Log para entender la estructura
-                st.write(f"{'  ' * nivel}📄 Nivel {nivel}: {page_path} (isParent: {page.get('isParentPage', False)}, subPages: {len(page.get('subPages', []))})")
+                indent = "  " * nivel
+                log_msg = f"{indent}📄 Nivel {nivel}: {page_path} (isParent: {page.get('isParentPage', False)}, subPages: {len(page.get('subPages', []))})"
+                st.session_state.wiki_logs.append(("info", log_msg))
 
             # Procesar subpáginas si existen
             if "subPages" in page and page["subPages"]:
-                st.write(f"{'  ' * nivel}  └─ Procesando {len(page['subPages'])} subpágina(s)")
+                indent = "  " * nivel
+                log_msg = f"{indent}  └─ Procesando {len(page['subPages'])} subpágina(s)"
+                st.session_state.wiki_logs.append(("info", log_msg))
                 for subpage in page["subPages"]:
                     paginas.extend(aplanar_paginas(subpage, nivel + 1, page_path))
             elif page.get("isParentPage", False):
-                st.warning(f"{'  ' * nivel}  ⚠️ Página marcada como padre pero sin subPages: {page_path}")
+                indent = "  " * nivel
+                log_msg = f"{indent}  ⚠️ Página marcada como padre pero sin subPages: {page_path}"
+                st.session_state.wiki_logs.append(("warning", log_msg))
 
             return paginas
 
         # Si hay páginas, aplanarlas
         if "path" in data or "subPages" in data:
-            st.write("🔄 **Procesando jerarquía de páginas...**")
+            st.session_state.wiki_logs.append(("info", "🔄 **Procesando jerarquía de páginas con recursionLevel...**"))
             paginas_encontradas = aplanar_paginas(data)
 
             if paginas_encontradas:
@@ -988,25 +998,126 @@ def obtener_paginas_wiki(organization, project, pat, wiki_id, recursion_level=5)
                     nivel = p.get('nivel', 0)
                     niveles_count[nivel] = niveles_count.get(nivel, 0) + 1
 
-                st.success(f"✅ Se encontraron {len(paginas_encontradas)} página(s)")
-                st.info(f"📊 Por nivel: " + ", ".join([f"Nivel {n}: {c}" for n, c in sorted(niveles_count.items())]))
+                st.session_state.wiki_logs.append(("success", f"✅ Se encontraron {len(paginas_encontradas)} página(s)"))
+                niveles_str = ", ".join([f"Nivel {n}: {c}" for n, c in sorted(niveles_count.items())])
+                st.session_state.wiki_logs.append(("info", f"📊 Por nivel: {niveles_str}"))
             else:
-                st.warning("⚠️ Se procesó la respuesta pero no se encontraron páginas válidas")
+                st.session_state.wiki_logs.append(("warning", "⚠️ Se procesó la respuesta pero no se encontraron páginas válidas"))
 
             return paginas_encontradas
         else:
-            st.warning("⚠️ La respuesta no tiene 'path' ni 'subPages' en la raíz")
-            st.write("**Claves disponibles:**", list(data.keys()) if isinstance(data, dict) else "No es un diccionario")
+            st.session_state.wiki_logs.append(("warning", "⚠️ La respuesta no tiene 'path' ni 'subPages' en la raíz"))
+            claves = list(data.keys()) if isinstance(data, dict) else "No es un diccionario"
+            st.session_state.wiki_logs.append(("info", f"**Claves disponibles:** {claves}"))
             return []
 
     except requests.exceptions.RequestException as e:
         if hasattr(e, 'response') and e.response is not None:
-            st.error(f"❌ Error HTTP {e.response.status_code}: {str(e)}")
+            st.session_state.wiki_logs.append(("error", f"❌ Error HTTP {e.response.status_code}: {str(e)}"))
         else:
-            st.error(f"❌ Error de conexión: {str(e)}")
+            st.session_state.wiki_logs.append(("error", f"❌ Error de conexión: {str(e)}"))
         return []
     except Exception as e:
-        st.error(f"❌ Error inesperado al obtener páginas: {str(e)}")
+        st.session_state.wiki_logs.append(("error", f"❌ Error inesperado al obtener páginas: {str(e)}"))
+        return []
+
+def obtener_paginas_wiki_recursivo(organization, project, pat, wiki_id, path="/", nivel=0, max_nivel=10):
+    """
+    Obtiene páginas de la wiki de forma recursiva haciendo múltiples llamadas a la API.
+    Este método es útil cuando recursionLevel no funciona correctamente.
+
+    Args:
+        path: Path de la página a obtener (default "/" para raíz)
+        nivel: Nivel actual de recursión
+        max_nivel: Nivel máximo de recursión para evitar bucles infinitos
+    """
+    if nivel > max_nivel:
+        return []
+
+    # Inicializar logs si no existen
+    if not hasattr(st.session_state, 'wiki_logs'):
+        st.session_state.wiki_logs = []
+
+    # URL para obtener página específica o raíz
+    if path == "/":
+        url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?api-version=7.1"
+    else:
+        # Codificar el path para la URL
+        encoded_path = requests.utils.quote(path, safe='')
+        url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/pages?path={encoded_path}&api-version=7.1"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+
+        if response.status_code == 401:
+            st.session_state.wiki_logs.append(("error", "❌ Error 401: No autorizado"))
+            return []
+
+        if response.status_code == 404:
+            st.session_state.wiki_logs.append(("warning", f"⚠️ Página no encontrada: {path}"))
+            return []
+
+        response.raise_for_status()
+        data = response.json()
+
+        paginas = []
+
+        # Procesar página actual
+        page_path = data.get('path', '')
+        if page_path and page_path != '/':
+            page_info = {
+                "id": data.get("id", page_path),
+                "path": page_path,
+                "order": data.get("order", 0),
+                "gitItemPath": data.get("gitItemPath", ""),
+                "url": data.get("url", ""),
+                "isParentPage": data.get("isParentPage", False),
+                "nivel": nivel
+            }
+            paginas.append(page_info)
+
+            indent = "  " * nivel
+            st.session_state.wiki_logs.append(("info", f"{indent}📄 {page_path} (nivel {nivel})"))
+
+        # Si tiene subpáginas, procesarlas recursivamente
+        if "subPages" in data and data["subPages"]:
+            num_subpages = len(data["subPages"])
+            indent = "  " * nivel
+            st.session_state.wiki_logs.append(("info", f"{indent}  └─ {num_subpages} subpágina(s)"))
+
+            for subpage in data["subPages"]:
+                subpage_path = subpage.get('path', '')
+                if subpage_path:
+                    # Llamada recursiva para cada subpágina
+                    subpaginas = obtener_paginas_wiki_recursivo(
+                        organization, project, pat, wiki_id,
+                        path=subpage_path,
+                        nivel=nivel + 1,
+                        max_nivel=max_nivel
+                    )
+                    paginas.extend(subpaginas)
+        elif data.get("isParentPage", False):
+            # Página marcada como padre pero sin subPages
+            indent = "  " * nivel
+            st.session_state.wiki_logs.append(("warning", f"{indent}  ⚠️ Marcada como padre pero sin subPages"))
+
+        return paginas
+
+    except requests.exceptions.RequestException as e:
+        msg = f"❌ Error al obtener {path}: {str(e)}"
+        st.session_state.wiki_logs.append(("error", msg))
+        return []
+    except Exception as e:
+        msg = f"❌ Error inesperado en {path}: {str(e)}"
+        st.session_state.wiki_logs.append(("error", msg))
         return []
 
 def obtener_contenido_pagina_wiki(organization, project, pat, wiki_id, page_id):
@@ -2004,38 +2115,57 @@ with tab_devops:
 
                     st.info(f"📖 Wiki seleccionada: **{selected_wiki['name']}**")
 
-                    # Botón para listar páginas
-                    if st.button("📄 Listar Páginas de esta Wiki", key="list_pages_common"):
-                        # Guardar logs en session_state para mostrar en col2
-                        st.session_state.wiki_logs = []
+                    # Botones para listar páginas (dos métodos)
+                    col_btn_a, col_btn_b = st.columns(2)
 
-                        with st.spinner("Obteniendo páginas de la wiki (todos los niveles)..."):
-                            # Usar recursionLevel alto para obtener TODA la jerarquía
-                            paginas = obtener_paginas_wiki(
-                                st.session_state.devops_org,
-                                st.session_state.devops_project,
-                                st.session_state.devops_pat,
-                                st.session_state.selected_wiki_id,
-                                recursion_level=10  # Alto para obtener todos los niveles
-                            )
+                    with col_btn_a:
+                        if st.button("📄 Método Estándar", key="list_pages_standard", use_container_width=True, help="Usa recursionLevel en una sola llamada a la API"):
+                            # Guardar logs en session_state para mostrar en col2
+                            st.session_state.wiki_logs = []
 
-                        if paginas:
-                            # Contar niveles por profundidad (número de '/' en el path)
-                            niveles_count = {}
-                            for p in paginas:
-                                nivel = p['path'].count('/')
-                                niveles_count[nivel] = niveles_count.get(nivel, 0) + 1
+                            with st.spinner("Obteniendo páginas con recursionLevel..."):
+                                # Usar recursionLevel alto para obtener TODA la jerarquía
+                                paginas = obtener_paginas_wiki(
+                                    st.session_state.devops_org,
+                                    st.session_state.devops_project,
+                                    st.session_state.devops_pat,
+                                    st.session_state.selected_wiki_id,
+                                    recursion_level=10  # Alto para obtener todos los niveles
+                                )
 
-                            st.session_state.available_wiki_pages = paginas
+                            if paginas:
+                                st.session_state.available_wiki_pages = paginas
+                                st.session_state.wiki_logs.append(("success", f"✅ Total: {len(paginas)} página(s) cargadas con método estándar"))
+                                st.rerun()
+                            else:
+                                st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas. Prueba el Método Recursivo."))
+                                st.rerun()
 
-                            # Logs informativos
-                            st.session_state.wiki_logs.append(("success", f"✅ Total: {len(paginas)} página(s) cargadas"))
-                            niveles_str = ", ".join([f"Nivel {n}: {c}" for n, c in sorted(niveles_count.items())])
-                            st.session_state.wiki_logs.append(("info", f"📊 Distribución por niveles: {niveles_str}"))
-                            st.rerun()
-                        else:
-                            st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas en esta wiki"))
-                            st.rerun()
+                    with col_btn_b:
+                        if st.button("🔄 Método Recursivo", key="list_pages_recursive", use_container_width=True, help="Hace múltiples llamadas para obtener cada subpágina (más lento pero más completo)"):
+                            # Guardar logs en session_state
+                            st.session_state.wiki_logs = []
+                            st.session_state.wiki_logs.append(("info", "🔄 Usando método recursivo (múltiples llamadas a la API)..."))
+
+                            with st.spinner("Obteniendo páginas recursivamente..."):
+                                # Usar método recursivo que hace múltiples llamadas
+                                paginas = obtener_paginas_wiki_recursivo(
+                                    st.session_state.devops_org,
+                                    st.session_state.devops_project,
+                                    st.session_state.devops_pat,
+                                    st.session_state.selected_wiki_id,
+                                    path="/",
+                                    nivel=0,
+                                    max_nivel=10
+                                )
+
+                            if paginas:
+                                st.session_state.available_wiki_pages = paginas
+                                st.session_state.wiki_logs.append(("success", f"✅ Total: {len(paginas)} página(s) cargadas con método recursivo"))
+                                st.rerun()
+                            else:
+                                st.session_state.wiki_logs.append(("error", "❌ No se encontraron páginas con ningún método"))
+                                st.rerun()
 
                     # Selector de páginas (individual + batch)
                     if 'available_wiki_pages' in st.session_state and st.session_state.available_wiki_pages:
