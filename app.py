@@ -2157,8 +2157,24 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
 def _procesar_respuesta_attachment(response, image_name):
     """Helper para procesar la respuesta del attachment"""
     try:
-        data = response.json()
+        # DEBUG: Mostrar respuesta completa
+        st.write(f"🔍 **DEBUG - Procesando respuesta para {image_name}**")
+        st.write(f"  Status Code: {response.status_code}")
+
+        # Intentar parsear JSON
+        try:
+            data = response.json()
+            st.write(f"  JSON Response: {json.dumps(data, indent=2)[:500]}")
+        except:
+            st.write(f"  ⚠️ No hay JSON en la respuesta")
+            st.write(f"  Response Text: {response.text[:300]}")
+            data = {}
+
+        # Mostrar headers
+        st.write(f"  Headers: {dict(response.headers)}")
+
         attachment_url = data.get('url', '')
+        st.write(f"  URL extraída: '{attachment_url}'")
 
         # Azure DevOps devuelve una URL de API, necesitamos convertirla a URL pública
         # Formato típico: /.attachments/{hash}/{filename}
@@ -2166,14 +2182,35 @@ def _procesar_respuesta_attachment(response, image_name):
             parts = attachment_url.split('/attachments/')
             if len(parts) > 1:
                 attachment_path = f"/.attachments/{parts[1]}"
+                st.write(f"  ✅ Path generado: {attachment_path}")
                 return True, attachment_path
 
+        # Intentar con header Location
+        location = response.headers.get('Location', '')
+        if location:
+            st.write(f"  📍 Location header encontrado: {location}")
+            if 'attachments' in location:
+                parts = location.split('/attachments/')
+                if len(parts) > 1:
+                    attachment_path = f"/.attachments/{parts[1]}"
+                    st.write(f"  ✅ Path desde Location: {attachment_path}")
+                    return True, attachment_path
+            return True, location
+
         # Si no podemos parsear, devolver la URL completa
-        return True, attachment_url
-    except:
+        if attachment_url:
+            st.write(f"  ⚠️ Usando URL completa: {attachment_url}")
+            return True, attachment_url
+
+        st.write(f"  ❌ No se pudo extraer ninguna URL")
+        return False, None
+
+    except Exception as e:
+        st.write(f"  ❌ Excepción en _procesar_respuesta_attachment: {str(e)}")
         # Si no hay JSON en la respuesta, intentar con headers
         location = response.headers.get('Location', '')
         if location:
+            st.write(f"  📍 Usando Location de fallback: {location}")
             return True, location
         return False, None
 
