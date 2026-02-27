@@ -2014,22 +2014,17 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
     credentials = f":{pat}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
 
-    # Azure DevOps espera la imagen en Base64
+    # Azure DevOps espera la imagen en Base64 como string directo en el body
     image_base64 = base64.b64encode(image_bytes).decode('utf-8')
 
     headers = {
         "Authorization": f"Basic {encoded_credentials}",
-        "Content-Type": "application/json"
-    }
-
-    # El body debe ser JSON con el contenido en base64
-    payload = {
-        "content": image_base64
+        "Content-Type": "text/plain"  # Base64 string directo, no JSON
     }
 
     try:
-        # IMPORTANTE: Usar PUT, no POST
-        response = requests.put(url, json=payload, headers=headers, timeout=60)
+        # IMPORTANTE: Usar PUT con Base64 directo en el body (no JSON)
+        response = requests.put(url, data=image_base64, headers=headers, timeout=60)
 
         if response.status_code in [200, 201]:
             data = response.json()
