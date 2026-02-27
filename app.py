@@ -2403,7 +2403,7 @@ tab_chat, tab_devops, tab_doc, tab_logs = st.tabs([
     "💬 Chat clásico",
     "🎯 Tareas Azure DevOps",
     "📄 Análisis Documentos",
-    "📋 Logs"
+    "📊 Monitor Log"
 ])
 
 # ================= TAB 1: CHAT CLÁSICO =================
@@ -2591,9 +2591,6 @@ with tab_devops:
 
                     with col_btn_a:
                         if st.button("📄 Método Estándar", key="list_pages_standard", use_container_width=True, help="Usa recursionLevel en una sola llamada a la API"):
-                            # Guardar logs en session_state para mostrar en col2
-                            st.session_state.wiki_logs = []
-
                             with st.spinner("Obteniendo páginas con recursionLevel..."):
                                 # Usar recursionLevel alto para obtener TODA la jerarquía
                                 paginas = obtener_paginas_wiki(
@@ -2606,17 +2603,15 @@ with tab_devops:
 
                             if paginas:
                                 st.session_state.available_wiki_pages = paginas
-                                st.session_state.wiki_logs.append(("success", f"✅ Total: {len(paginas)} página(s) cargadas con método estándar"))
+                                add_log(f"✅ Total: {len(paginas)} página(s) cargadas con método estándar", "success")
                                 st.rerun()
                             else:
-                                st.session_state.wiki_logs.append(("warning", "⚠️ No se encontraron páginas. Prueba el Método Recursivo."))
+                                add_log("⚠️ No se encontraron páginas. Prueba el Método Recursivo.", "warning")
                                 st.rerun()
 
                     with col_btn_b:
                         if st.button("🔄 Expandir Páginas Padre", key="list_pages_expand", use_container_width=True, help="Primero obtiene páginas padre y luego expande cada una (más lento pero completo)"):
-                            # Guardar logs en session_state
-                            st.session_state.wiki_logs = []
-                            st.session_state.wiki_logs.append(("info", "🔄 Paso 1: Obteniendo páginas padre..."))
+                            add_log("🔄 Paso 1: Obteniendo páginas padre...", "info")
 
                             with st.spinner("Paso 1: Obteniendo páginas padre..."):
                                 # Primero obtener las páginas padre con el método estándar
@@ -2629,8 +2624,8 @@ with tab_devops:
                                 )
 
                             if paginas_padre:
-                                st.session_state.wiki_logs.append(("success", f"✅ {len(paginas_padre)} página(s) padre obtenidas"))
-                                st.session_state.wiki_logs.append(("info", "🔄 Paso 2: Expandiendo cada página padre para obtener subpáginas..."))
+                                add_log(f"✅ {len(paginas_padre)} página(s) padre obtenidas", "success")
+                                add_log("🔄 Paso 2: Expandiendo cada página padre para obtener subpáginas...", "info")
 
                                 with st.spinner("Paso 2: Expandiendo páginas padre..."):
                                     # Ahora expandir cada página padre
@@ -2644,13 +2639,13 @@ with tab_devops:
 
                                 if paginas_expandidas:
                                     st.session_state.available_wiki_pages = paginas_expandidas
-                                    st.session_state.wiki_logs.append(("success", f"🎉 Proceso completado: {len(paginas_expandidas)} página(s) totales"))
+                                    add_log(f"🎉 Proceso completado: {len(paginas_expandidas)} página(s) totales", "success")
                                     st.rerun()
                                 else:
-                                    st.session_state.wiki_logs.append(("warning", "⚠️ No se pudieron expandir las páginas padre"))
+                                    add_log("⚠️ No se pudieron expandir las páginas padre", "warning")
                                     st.rerun()
                             else:
-                                st.session_state.wiki_logs.append(("error", "❌ No se encontraron páginas padre. Verifica la conexión."))
+                                add_log("❌ No se encontraron páginas padre. Verifica la conexión.", "error")
                                 st.rerun()
 
                     # Selector de páginas (individual + batch)
@@ -2669,20 +2664,37 @@ with tab_devops:
                             st.info(f"📑 Todas las páginas seleccionadas ({len(selected_pages_raw)})")
                         else:
                             st.markdown("**Selecciona páginas (se muestran con indentación según su nivel):**")
-                            for idx, page in enumerate(st.session_state.available_wiki_pages):
-                                # Calcular nivel basado en '/' en el path
-                                nivel = page['path'].count('/') - 1
-                                indentacion = "　" * nivel  # Espacios amplios para indentación visual
 
-                                # Indicador si es página padre
-                                icono = "📁" if page.get('isParentPage', False) else "📄"
+                            # Contenedor con scroll para el árbol de páginas
+                            st.markdown("""
+                            <style>
+                            .wiki-tree-container {
+                                max-height: 400px;
+                                overflow-y: auto;
+                                padding: 10px;
+                                background-color: #f8f9fa;
+                                border: 1px solid #dee2e6;
+                                border-radius: 5px;
+                                margin-bottom: 10px;
+                            }
+                            </style>
+                            """, unsafe_allow_html=True)
 
-                                if st.checkbox(
-                                    f"{indentacion}{icono} {page['path']}",
-                                    value=False,
-                                    key=f"wiki_page_common_{idx}"
-                                ):
-                                    selected_pages_raw.append(page)
+                            with st.container():
+                                for idx, page in enumerate(st.session_state.available_wiki_pages):
+                                    # Calcular nivel basado en '/' en el path
+                                    nivel = page['path'].count('/') - 1
+                                    indentacion = "　" * nivel  # Espacios amplios para indentación visual
+
+                                    # Indicador si es página padre
+                                    icono = "📁" if page.get('isParentPage', False) else "📄"
+
+                                    if st.checkbox(
+                                        f"{indentacion}{icono} {page['path']}",
+                                        value=False,
+                                        key=f"wiki_page_common_{idx}"
+                                    ):
+                                        selected_pages_raw.append(page)
 
                         # Expandir selección: si una página padre está seleccionada,
                         # incluir automáticamente todas sus subpáginas
@@ -2736,22 +2748,6 @@ with tab_devops:
                     key="wiki_top_k_common"
                 )
 
-                st.markdown("---")
-                st.markdown("#### 📊 Logs y Debug")
-
-                # Mostrar logs guardados
-                if hasattr(st.session_state, 'wiki_logs') and st.session_state.wiki_logs:
-                    for log_type, log_message in st.session_state.wiki_logs:
-                        if log_type == "info":
-                            st.info(log_message)
-                        elif log_type == "success":
-                            st.success(log_message)
-                        elif log_type == "warning":
-                            st.warning(log_message)
-                        elif log_type == "error":
-                            st.error(log_message)
-                else:
-                    st.text("No hay logs disponibles")
 
             st.markdown("---")
 
@@ -3575,7 +3571,7 @@ with tab_devops:
                         # Mapa para tracking de paths reales de páginas creadas
                         titulo_a_path = {}
 
-                        st.info("📋 Los logs de creación se pueden ver en tiempo real en la pestaña 'Logs'")
+                        st.info("📊 Los logs de creación se pueden ver en tiempo real en la pestaña 'Monitor Log'")
 
                         for idx, pagina in enumerate(paginas_ordenadas):
                             progress_bar.progress((idx + 1) / len(paginas_ordenadas))
@@ -5155,7 +5151,7 @@ Genera el/los work item(s) solicitados siguiendo la plantilla proporcionada y ba
 # TAB 4: LOGS
 # ==================================================
 with tab_logs:
-    st.title("📋 Logs de la Aplicación")
+    st.title("📊 Monitor Log")
 
     col1, col2 = st.columns([3, 1])
 
