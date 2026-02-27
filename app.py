@@ -1991,6 +1991,7 @@ def actualizar_pagina_wiki_azure(organization, project, pat, wiki_id, path, cont
 def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, image_name):
     """
     Sube una imagen como attachment a Azure DevOps Wiki
+    Prueba múltiples métodos hasta encontrar el que funcione para Project Wiki
 
     Args:
         organization: Organización de Azure DevOps
@@ -2004,55 +2005,80 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
         tuple: (success: bool, attachment_url: str or None)
     """
     import uuid
+    from io import BytesIO
 
     # Generar nombre único para evitar colisiones
     unique_name = f"{uuid.uuid4().hex[:8]}_{image_name}"
 
-    # API de Azure DevOps para attachments usa PUT, no POST
     url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/attachments?name={unique_name}&api-version=7.1-preview.1"
 
     credentials = f":{pat}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
 
-    # Azure DevOps espera la imagen en Base64
-    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-
-    headers = {
-        "Authorization": f"Basic {encoded_credentials}",
-        "Content-Type": "application/json"
-    }
-
-    # El body debe ser JSON con el contenido en base64
-    payload = {
-        "content": image_base64
-    }
-
+    # Método 1: Intentar con bytes binarios directos (application/octet-stream)
     try:
-        # IMPORTANTE: Usar PUT, no POST
-        response = requests.put(url, json=payload, headers=headers, timeout=60)
+        headers = {
+            "Authorization": f"Basic {encoded_credentials}",
+            "Content-Type": "application/octet-stream"
+        }
+        response = requests.put(url, data=image_bytes, headers=headers, timeout=60)
 
         if response.status_code in [200, 201]:
-            data = response.json()
-            # La URL del attachment está en la respuesta
-            attachment_url = data.get('url', '')
-
-            # Azure DevOps devuelve una URL de API, necesitamos convertirla a URL pública
-            # Formato típico: /.attachments/{hash}/{filename}
-            if 'attachments' in attachment_url:
-                # Extraer la parte del path del attachment
-                parts = attachment_url.split('/attachments/')
-                if len(parts) > 1:
-                    attachment_path = f"/.attachments/{parts[1]}"
-                    return True, attachment_path
-
-            # Si no podemos parsear, devolver la URL completa
-            return True, attachment_url
-        else:
-            st.warning(f"⚠️ Error {response.status_code} al subir imagen {image_name}: {response.text[:200]}")
-            return False, None
-
+            return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        st.error(f"❌ Error al subir imagen {image_name}: {str(e)}")
+        pass  # Continuar con siguiente método
+
+    # Método 2: Intentar con multipart/form-data
+    try:
+        files = {'file': (unique_name, BytesIO(image_bytes), 'application/octet-stream')}
+        headers = {"Authorization": f"Basic {encoded_credentials}"}
+        response = requests.put(url, files=files, headers=headers, timeout=60)
+
+        if response.status_code in [200, 201]:
+            return _procesar_respuesta_attachment(response, image_name)
+    except Exception as e:
+        pass  # Continuar con siguiente método
+
+    # Método 3: Intentar sin parámetro name en URL (puede estar en Content-Disposition)
+    try:
+        url_alt = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/attachments?api-version=7.1-preview.1"
+        headers = {
+            "Authorization": f"Basic {encoded_credentials}",
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": f'attachment; filename="{unique_name}"'
+        }
+        response = requests.put(url_alt, data=image_bytes, headers=headers, timeout=60)
+
+        if response.status_code in [200, 201]:
+            return _procesar_respuesta_attachment(response, image_name)
+    except Exception as e:
+        pass
+
+    # Si todos los métodos fallan, mostrar último error
+    st.warning(f"⚠️ No se pudo subir {image_name} - Métodos 1-3 fallaron")
+    return False, None
+
+def _procesar_respuesta_attachment(response, image_name):
+    """Helper para procesar la respuesta del attachment"""
+    try:
+        data = response.json()
+        attachment_url = data.get('url', '')
+
+        # Azure DevOps devuelve una URL de API, necesitamos convertirla a URL pública
+        # Formato típico: /.attachments/{hash}/{filename}
+        if 'attachments' in attachment_url:
+            parts = attachment_url.split('/attachments/')
+            if len(parts) > 1:
+                attachment_path = f"/.attachments/{parts[1]}"
+                return True, attachment_path
+
+        # Si no podemos parsear, devolver la URL completa
+        return True, attachment_url
+    except:
+        # Si no hay JSON en la respuesta, intentar con headers
+        location = response.headers.get('Location', '')
+        if location:
+            return True, location
         return False, None
 
 def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat, wiki_id, logs_container=None):
