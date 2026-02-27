@@ -4,6 +4,7 @@ import os
 import zipfile
 import tempfile
 import base64
+import uuid
 from pathlib import Path
 import json
 from datetime import datetime
@@ -2017,26 +2018,28 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
 
     errores = []  # Colectar errores de cada método
 
-    # Método 1: PUT con bytes binarios directos (application/octet-stream)
+    # Método 1: PUT con Base64 string (application/octet-stream)
     try:
-        st.write(f"🔍 **Método 1** - PUT con bytes binarios...")
+        st.write(f"🔍 **Método 1** - PUT con Base64 string + octet-stream...")
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
             "Content-Type": "application/octet-stream"
         }
-        response = requests.put(url, data=image_bytes, headers=headers, timeout=60)
+        # Convertir bytes a Base64 string
+        base64_content = base64.b64encode(image_bytes).decode('utf-8')
+        response = requests.put(url, data=base64_content, headers=headers, timeout=60)
 
         st.write(f"  → Status: {response.status_code}")
         if response.status_code not in [200, 201]:
             error_msg = response.text[:300] if response.text else "Sin mensaje"
             st.write(f"  → Error: {error_msg}")
-            errores.append(f"Método 1 (PUT bytes): {response.status_code} - {error_msg[:100]}")
+            errores.append(f"Método 1 (PUT Base64): {response.status_code} - {error_msg[:100]}")
         else:
             st.success(f"  ✅ Método 1 funcionó!")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
         st.write(f"  ❌ Excepción: {str(e)[:100]}")
-        errores.append(f"Método 1 (PUT bytes): Excepción - {str(e)[:100]}")
+        errores.append(f"Método 1 (PUT Base64): Excepción - {str(e)[:100]}")
 
     # Método 2: POST con bytes binarios directos
     try:
@@ -2096,6 +2099,53 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
     except Exception as e:
         st.write(f"  ❌ Excepción: {str(e)[:100]}")
         errores.append(f"Método 4 (POST multipart): Excepción - {str(e)[:100]}")
+
+    # Método 5: PUT con JSON y Base64
+    try:
+        st.write(f"🔍 **Método 5** - PUT con JSON + Base64...")
+        headers = {
+            "Authorization": f"Basic {encoded_credentials}",
+            "Content-Type": "application/json"
+        }
+        base64_content = base64.b64encode(image_bytes).decode('utf-8')
+        json_data = {
+            "content": base64_content,
+            "name": unique_name
+        }
+        response = requests.put(url, json=json_data, headers=headers, timeout=60)
+
+        st.write(f"  → Status: {response.status_code}")
+        if response.status_code not in [200, 201]:
+            error_msg = response.text[:300] if response.text else "Sin mensaje"
+            st.write(f"  → Error: {error_msg}")
+            errores.append(f"Método 5 (PUT JSON): {response.status_code} - {error_msg[:100]}")
+        else:
+            st.success(f"  ✅ Método 5 funcionó!")
+            return _procesar_respuesta_attachment(response, image_name)
+    except Exception as e:
+        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        errores.append(f"Método 5 (PUT JSON): Excepción - {str(e)[:100]}")
+
+    # Método 6: PUT con bytes binarios raw (application/octet-stream)
+    try:
+        st.write(f"🔍 **Método 6** - PUT con bytes binarios raw...")
+        headers = {
+            "Authorization": f"Basic {encoded_credentials}",
+            "Content-Type": "application/octet-stream"
+        }
+        response = requests.put(url, data=image_bytes, headers=headers, timeout=60)
+
+        st.write(f"  → Status: {response.status_code}")
+        if response.status_code not in [200, 201]:
+            error_msg = response.text[:300] if response.text else "Sin mensaje"
+            st.write(f"  → Error: {error_msg}")
+            errores.append(f"Método 6 (PUT raw bytes): {response.status_code} - {error_msg[:100]}")
+        else:
+            st.success(f"  ✅ Método 6 funcionó!")
+            return _procesar_respuesta_attachment(response, image_name)
+    except Exception as e:
+        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        errores.append(f"Método 6 (PUT raw bytes): Excepción - {str(e)[:100]}")
 
     # Si todos los métodos fallan, mostrar resumen de errores
     st.error(f"❌ **Todos los métodos fallaron para {image_name}**")
