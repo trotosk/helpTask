@@ -2008,7 +2008,8 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
     # Generar nombre único para evitar colisiones
     unique_name = f"{uuid.uuid4().hex[:8]}_{image_name}"
 
-    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/attachments?name={unique_name}&api-version=7.1"
+    # API de Azure DevOps para attachments usa PUT, no POST
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/attachments?name={unique_name}&api-version=7.1-preview.1"
 
     credentials = f":{pat}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
@@ -2019,7 +2020,8 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
     }
 
     try:
-        response = requests.post(url, data=image_bytes, headers=headers, timeout=60)
+        # IMPORTANTE: Usar PUT, no POST
+        response = requests.put(url, data=image_bytes, headers=headers, timeout=60)
 
         if response.status_code in [200, 201]:
             data = response.json()
@@ -2045,7 +2047,7 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
         st.error(f"❌ Error al subir imagen {image_name}: {str(e)}")
         return False, None
 
-def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat, wiki_id):
+def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat, wiki_id, logs_container=None):
     """
     Procesa las imágenes extraídas del documento:
     1. Sube cada imagen a Azure DevOps Wiki como attachment
@@ -2055,6 +2057,7 @@ def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat
         markdown: Texto markdown con placeholders
         imagenes: Lista de dict con 'data', 'name', 'position'
         organization, project, pat, wiki_id: Credenciales de Azure DevOps
+        logs_container: Contenedor de Streamlit para mostrar logs (opcional)
 
     Returns:
         str: Markdown con imágenes insertadas
@@ -2079,10 +2082,19 @@ def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat
             alt_text = imagen['name'].rsplit('.', 1)[0]
             imagen_markdown = f"![{alt_text}]({attachment_url})"
             markdown_procesado = markdown_procesado.replace(placeholder, imagen_markdown)
-            st.info(f"📸 Imagen subida: {imagen['name']} → {attachment_url}")
+
+            if logs_container:
+                with logs_container:
+                    st.info(f"📸 Imagen subida: {imagen['name']} → {attachment_url}")
+            else:
+                st.info(f"📸 Imagen subida: {imagen['name']} → {attachment_url}")
         else:
             # Si falla, remover el placeholder
-            st.warning(f"⚠️ No se pudo subir {imagen['name']}, se omitirá la imagen")
+            if logs_container:
+                with logs_container:
+                    st.warning(f"⚠️ No se pudo subir {imagen['name']}, se omitirá la imagen")
+            else:
+                st.warning(f"⚠️ No se pudo subir {imagen['name']}, se omitirá la imagen")
             markdown_procesado = markdown_procesado.replace(placeholder, "")
 
     return markdown_procesado
@@ -3369,6 +3381,22 @@ with tab_devops:
                         # Mapa para tracking de paths reales de páginas creadas
                         titulo_a_path = {}
 
+                        # Contenedor con scroll para logs
+                        logs_container = st.container()
+
+                        # Agregar CSS para scroll
+                        st.markdown("""
+                        <style>
+                        .stContainer > div {
+                            max-height: 500px;
+                            overflow-y: auto;
+                            padding: 10px;
+                            border: 1px solid #ddd;
+                            border-radius: 5px;
+                        }
+                        </style>
+                        """, unsafe_allow_html=True)
+
                         for idx, pagina in enumerate(paginas_ordenadas):
                             progress_bar.progress((idx + 1) / len(paginas_ordenadas))
                             status_text.text(f"Creando: {pagina['titulo']} ({idx + 1}/{len(paginas_ordenadas)})")
@@ -3408,7 +3436,8 @@ with tab_devops:
                                     st.session_state.devops_org,
                                     st.session_state.devops_project,
                                     st.session_state.devops_pat,
-                                    st.session_state.selected_wiki_id_crear
+                                    st.session_state.selected_wiki_id_crear,
+                                    logs_container  # Pasar el contenedor para logs
                                 )
 
                             success, result = crear_pagina_wiki_azure(
@@ -3423,10 +3452,12 @@ with tab_devops:
                             if success:
                                 exitos += 1
                                 titulo_a_path[pagina['titulo']] = path
-                                st.success(f"✅ Creada: {pagina['titulo']} → {path}")
+                                with logs_container:
+                                    st.success(f"✅ Creada: {pagina['titulo']} → {path}")
                             else:
                                 errores += 1
-                                st.error(f"❌ Error: {pagina['titulo']}")
+                                with logs_container:
+                                    st.error(f"❌ Error: {pagina['titulo']}")
                                 # Guardar la página fallida con su path calculado
                                 paginas_fallidas_nuevas.append({
                                     "titulo": pagina['titulo'],
