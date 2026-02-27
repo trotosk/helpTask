@@ -77,6 +77,7 @@ defaults = {
     "doc_messages": [],
     "wiki_messages": [],
     "memory_summary": "",
+    "app_logs": [],  # Sistema de logs centralizado
     # Estado para DevOps
     "devops_incidencias": [],
     "devops_embeddings": None,
@@ -123,6 +124,42 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 CHUNK_SIZE = 10000  # caracteres por fragmento para archivos grandes
+
+# ==================================================
+# SISTEMA DE LOGS CENTRALIZADO
+# ==================================================
+def add_log(message, log_type="info"):
+    """
+    Añade un log al sistema centralizado de logs.
+
+    Args:
+        message: Mensaje del log
+        log_type: Tipo de log (info, success, error, warning, debug)
+    """
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_entry = {
+        "timestamp": timestamp,
+        "type": log_type,
+        "message": message
+    }
+    st.session_state.app_logs.append(log_entry)
+    # También imprimir en consola para debugging
+    print(f"[{timestamp}] [{log_type.upper()}] {message}")
+
+def clear_logs():
+    """Limpia todos los logs."""
+    st.session_state.app_logs = []
+
+def get_log_icon(log_type):
+    """Retorna el icono apropiado según el tipo de log."""
+    icons = {
+        "info": "ℹ️",
+        "success": "✅",
+        "error": "❌",
+        "warning": "⚠️",
+        "debug": "🔍"
+    }
+    return icons.get(log_type, "📝")
 
 # ==================================================
 # MAPEO DE CAMPOS POR TIPO DE WORK ITEM
@@ -344,18 +381,18 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
     
     try:
         # Debug
-        st.info(f"🔍 Consultando: {organization}/{project}")
-        st.info(f"📋 Tipos: {', '.join(work_item_types)}")
+        add_log(f"🔍 Consultando: {organization}/{project}", "info")
+        add_log(f"📋 Tipos: {', '.join(work_item_types)}", "info")
         if area_path:
-            st.info(f"📁 Área: {area_path}")
-        st.info(f"🔢 Límite: {max_items} items")
-        
+            add_log(f"📁 Área: {area_path}", "info")
+        add_log(f"🔢 Límite: {max_items} items", "info")
+
         response = requests.post(url, json=wiql, headers=headers, timeout=30)
-        st.write(f"**Status Code:** {response.status_code}")
-        
+        add_log(f"Status Code: {response.status_code}", "debug")
+
         if response.status_code != 200:
-            st.error(f"❌ Error HTTP {response.status_code}")
-            st.code(response.text[:500])
+            add_log(f"❌ Error HTTP {response.status_code}", "error")
+            add_log(f"Response: {response.text[:500]}", "error")
             return []
         
         response.raise_for_status()
@@ -2020,10 +2057,7 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
 
     # Método 1: PUT con Base64 string (application/octet-stream)
     try:
-        st.write(f"🔍 **Método 1** - PUT con Base64 string + octet-stream...")
-        print(f"\n{'='*80}")
-        print(f"🔍 MÉTODO 1 - PUT con Base64 string + octet-stream")
-        print(f"{'='*80}")
+        add_log(f"Método 1 - PUT con Base64 string + octet-stream para {image_name}", "debug")
 
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
@@ -2033,107 +2067,78 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
         # Convertir bytes a Base64 string
         base64_content = base64.b64encode(image_bytes).decode('utf-8')
 
-        # Log del REQUEST
-        print(f"\n📤 REQUEST:")
-        print(f"  URL: {url}")
-        print(f"  Method: PUT")
-        print(f"  Headers: {json.dumps({k: v if k != 'Authorization' else 'Basic ***' for k, v in headers.items()}, indent=2)}")
-        print(f"  Data Type: Base64 string")
-        print(f"  Data Size: {len(base64_content)} chars (original bytes: {len(image_bytes)})")
-        print(f"  Data Preview: {base64_content[:100]}...")
-
         response = requests.put(url, data=base64_content, headers=headers, timeout=60)
 
-        # Log del RESPONSE
-        print(f"\n📥 RESPONSE:")
-        print(f"  Status Code: {response.status_code}")
-        print(f"  Headers: {json.dumps(dict(response.headers), indent=2)}")
-
-        try:
-            response_json = response.json()
-            print(f"  JSON Body: {json.dumps(response_json, indent=2)}")
-        except:
-            print(f"  Text Body: {response.text[:500]}")
-
-        st.write(f"  → Status: {response.status_code}")
         if response.status_code not in [200, 201]:
             error_msg = response.text[:300] if response.text else "Sin mensaje"
-            st.write(f"  → Error: {error_msg}")
-            print(f"\n❌ ERROR: {error_msg}")
+            add_log(f"Método 1 falló: Status {response.status_code}", "debug")
             errores.append(f"Método 1 (PUT Base64): {response.status_code} - {error_msg[:100]}")
         else:
-            st.success(f"  ✅ Método 1 funcionó!")
-            print(f"\n✅ Método 1 funcionó! Procesando respuesta...")
+            add_log(f"✅ Método 1 funcionó para {image_name}", "success")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        st.write(f"  ❌ Excepción: {str(e)[:100]}")
-        print(f"\n❌ EXCEPCIÓN en Método 1: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
+        add_log(f"Método 1 excepción: {str(e)[:100]}", "debug")
         errores.append(f"Método 1 (PUT Base64): Excepción - {str(e)[:100]}")
 
     # Método 2: POST con bytes binarios directos
     try:
-        st.write(f"🔍 **Método 2** - POST con bytes binarios...")
+        add_log(f"Método 2 - POST con bytes binarios para {image_name}", "debug")
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
             "Content-Type": "application/octet-stream"
         }
         response = requests.post(url, data=image_bytes, headers=headers, timeout=60)
 
-        st.write(f"  → Status: {response.status_code}")
         if response.status_code not in [200, 201]:
             error_msg = response.text[:300] if response.text else "Sin mensaje"
-            st.write(f"  → Error: {error_msg}")
+            add_log(f"Método 2 falló: Status {response.status_code}", "debug")
             errores.append(f"Método 2 (POST bytes): {response.status_code} - {error_msg[:100]}")
         else:
-            st.success(f"  ✅ Método 2 funcionó!")
+            add_log(f"✅ Método 2 funcionó para {image_name}", "success")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        add_log(f"Método 2 excepción: {str(e)[:100]}", "debug")
         errores.append(f"Método 2 (POST bytes): Excepción - {str(e)[:100]}")
 
     # Método 3: PUT con multipart/form-data
     try:
-        st.write(f"🔍 **Método 3** - PUT con multipart/form-data...")
+        add_log(f"Método 3 - PUT con multipart/form-data para {image_name}", "debug")
         files = {'file': (unique_name, BytesIO(image_bytes), 'application/octet-stream')}
         headers = {"Authorization": f"Basic {encoded_credentials}"}
         response = requests.put(url, files=files, headers=headers, timeout=60)
 
-        st.write(f"  → Status: {response.status_code}")
         if response.status_code not in [200, 201]:
             error_msg = response.text[:300] if response.text else "Sin mensaje"
-            st.write(f"  → Error: {error_msg}")
+            add_log(f"Método 3 falló: Status {response.status_code}", "debug")
             errores.append(f"Método 3 (PUT multipart): {response.status_code} - {error_msg[:100]}")
         else:
-            st.success(f"  ✅ Método 3 funcionó!")
+            add_log(f"✅ Método 3 funcionó para {image_name}", "success")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        add_log(f"Método 3 excepción: {str(e)[:100]}", "debug")
         errores.append(f"Método 3 (PUT multipart): Excepción - {str(e)[:100]}")
 
     # Método 4: POST con multipart/form-data
     try:
-        st.write(f"🔍 **Método 4** - POST con multipart/form-data...")
+        add_log(f"Método 4 - POST con multipart/form-data para {image_name}", "debug")
         files = {'file': (unique_name, BytesIO(image_bytes), 'application/octet-stream')}
         headers = {"Authorization": f"Basic {encoded_credentials}"}
         response = requests.post(url, files=files, headers=headers, timeout=60)
 
-        st.write(f"  → Status: {response.status_code}")
         if response.status_code not in [200, 201]:
             error_msg = response.text[:300] if response.text else "Sin mensaje"
-            st.write(f"  → Error: {error_msg}")
+            add_log(f"Método 4 falló: Status {response.status_code}", "debug")
             errores.append(f"Método 4 (POST multipart): {response.status_code} - {error_msg[:100]}")
         else:
-            st.success(f"  ✅ Método 4 funcionó!")
+            add_log(f"✅ Método 4 funcionó para {image_name}", "success")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        add_log(f"Método 4 excepción: {str(e)[:100]}", "debug")
         errores.append(f"Método 4 (POST multipart): Excepción - {str(e)[:100]}")
 
     # Método 5: PUT con JSON y Base64
     try:
-        st.write(f"🔍 **Método 5** - PUT con JSON + Base64...")
+        add_log(f"Método 5 - PUT con JSON + Base64 para {image_name}", "debug")
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
             "Content-Type": "application/json"
@@ -2145,81 +2150,59 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
         }
         response = requests.put(url, json=json_data, headers=headers, timeout=60)
 
-        st.write(f"  → Status: {response.status_code}")
         if response.status_code not in [200, 201]:
             error_msg = response.text[:300] if response.text else "Sin mensaje"
-            st.write(f"  → Error: {error_msg}")
+            add_log(f"Método 5 falló: Status {response.status_code}", "debug")
             errores.append(f"Método 5 (PUT JSON): {response.status_code} - {error_msg[:100]}")
         else:
-            st.success(f"  ✅ Método 5 funcionó!")
+            add_log(f"✅ Método 5 funcionó para {image_name}", "success")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        add_log(f"Método 5 excepción: {str(e)[:100]}", "debug")
         errores.append(f"Método 5 (PUT JSON): Excepción - {str(e)[:100]}")
 
     # Método 6: PUT con bytes binarios raw (application/octet-stream)
     try:
-        st.write(f"🔍 **Método 6** - PUT con bytes binarios raw...")
+        add_log(f"Método 6 - PUT con bytes binarios raw para {image_name}", "debug")
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
             "Content-Type": "application/octet-stream"
         }
         response = requests.put(url, data=image_bytes, headers=headers, timeout=60)
 
-        st.write(f"  → Status: {response.status_code}")
         if response.status_code not in [200, 201]:
             error_msg = response.text[:300] if response.text else "Sin mensaje"
-            st.write(f"  → Error: {error_msg}")
+            add_log(f"Método 6 falló: Status {response.status_code}", "debug")
             errores.append(f"Método 6 (PUT raw bytes): {response.status_code} - {error_msg[:100]}")
         else:
-            st.success(f"  ✅ Método 6 funcionó!")
+            add_log(f"✅ Método 6 funcionó para {image_name}", "success")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        add_log(f"Método 6 excepción: {str(e)[:100]}", "debug")
         errores.append(f"Método 6 (PUT raw bytes): Excepción - {str(e)[:100]}")
 
     # Si todos los métodos fallan, mostrar resumen de errores
-    st.error(f"❌ **Todos los métodos fallaron para {image_name}**")
+    add_log(f"❌ Todos los métodos fallaron para {image_name}", "error")
     for error in errores:
-        st.write(f"  • {error}")
+        add_log(f"  • {error}", "error")
 
     return False, None
 
 def _procesar_respuesta_attachment(response, image_name):
     """Helper para procesar la respuesta del attachment"""
     try:
-        # DEBUG: Mostrar respuesta completa
-        st.write(f"🔍 **DEBUG - Procesando respuesta para {image_name}**")
-        st.write(f"  Status Code: {response.status_code}")
-
-        print(f"\n{'='*80}")
-        print(f"🔍 PROCESANDO RESPUESTA PARA: {image_name}")
-        print(f"{'='*80}")
-        print(f"Status Code: {response.status_code}")
+        add_log(f"Procesando respuesta para {image_name} (Status: {response.status_code})", "debug")
 
         # Intentar parsear JSON
         try:
             data = response.json()
-            st.write(f"  JSON Response: {json.dumps(data, indent=2)[:500]}")
-            print(f"\n📋 JSON RESPONSE COMPLETO:")
-            print(json.dumps(data, indent=2))
+            add_log(f"JSON Response: {json.dumps(data, indent=2)[:200]}...", "debug")
         except:
-            st.write(f"  ⚠️ No hay JSON en la respuesta")
-            st.write(f"  Response Text: {response.text[:300]}")
-            print(f"\n⚠️ NO HAY JSON EN LA RESPUESTA")
-            print(f"Response Text: {response.text[:500]}")
+            add_log(f"No hay JSON en la respuesta", "debug")
             data = {}
-
-        # Mostrar headers
-        st.write(f"  Headers: {dict(response.headers)}")
-        print(f"\n📋 RESPONSE HEADERS:")
-        print(json.dumps(dict(response.headers), indent=2))
 
         # Intentar primero 'path' (Project Wiki) y luego 'url' (Code Wiki) como fallback
         attachment_url = data.get('path', '') or data.get('url', '')
-        st.write(f"  URL extraída: '{attachment_url}'")
-        print(f"\n🔗 URL extraída del JSON: '{attachment_url}'")
-        print(f"   (Buscó en 'path': {data.get('path', 'N/A')!r}, 'url': {data.get('url', 'N/A')!r})")
 
         # Azure DevOps devuelve una URL de API, necesitamos convertirla a URL pública
         # Formato típico: /.attachments/{hash}/{filename}
@@ -2227,43 +2210,30 @@ def _procesar_respuesta_attachment(response, image_name):
             parts = attachment_url.split('/attachments/')
             if len(parts) > 1:
                 attachment_path = f"/.attachments/{parts[1]}"
-                st.write(f"  ✅ Path generado: {attachment_path}")
-                print(f"✅ Path generado desde URL: {attachment_path}")
-                print(f"{'='*80}\n")
+                add_log(f"Path generado para {image_name}: {attachment_path}", "debug")
                 return True, attachment_path
 
         # Intentar con header Location
         location = response.headers.get('Location', '')
         if location:
-            st.write(f"  📍 Location header encontrado: {location}")
-            print(f"📍 Location header encontrado: {location}")
             if 'attachments' in location:
                 parts = location.split('/attachments/')
                 if len(parts) > 1:
                     attachment_path = f"/.attachments/{parts[1]}"
-                    st.write(f"  ✅ Path desde Location: {attachment_path}")
-                    print(f"✅ Path generado desde Location: {attachment_path}")
-                    print(f"{'='*80}\n")
+                    add_log(f"Path desde Location para {image_name}: {attachment_path}", "debug")
                     return True, attachment_path
-            print(f"✅ Usando Location completo: {location}")
-            print(f"{'='*80}\n")
             return True, location
 
         # Si no podemos parsear, devolver la URL completa
         if attachment_url:
-            st.write(f"  ⚠️ Usando URL completa: {attachment_url}")
-            print(f"⚠️ Usando URL completa: {attachment_url}")
-            print(f"{'='*80}\n")
+            add_log(f"Usando URL completa para {image_name}: {attachment_url[:50]}...", "debug")
             return True, attachment_url
 
-        st.write(f"  ❌ No se pudo extraer ninguna URL")
-        print(f"❌ NO SE PUDO EXTRAER NINGUNA URL")
-        print(f"{'='*80}\n")
+        add_log(f"❌ No se pudo extraer URL para {image_name}", "error")
         return False, None
 
     except Exception as e:
-        st.write(f"  ❌ Excepción en _procesar_respuesta_attachment: {str(e)}")
-        print(f"\n❌ EXCEPCIÓN en _procesar_respuesta_attachment: {str(e)}")
+        add_log(f"❌ Excepción en _procesar_respuesta_attachment: {str(e)}", "error")
         import traceback
         print(traceback.format_exc())
         # Si no hay JSON en la respuesta, intentar con headers
@@ -2277,7 +2247,7 @@ def _procesar_respuesta_attachment(response, image_name):
         print(f"{'='*80}\n")
         return False, None
 
-def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat, wiki_id, logs_container=None):
+def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat, wiki_id):
     """
     Procesa las imágenes extraídas del documento:
     1. Sube cada imagen a Azure DevOps Wiki como attachment
@@ -2287,7 +2257,6 @@ def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat
         markdown: Texto markdown con placeholders
         imagenes: Lista de dict con 'data', 'name', 'position'
         organization, project, pat, wiki_id: Credenciales de Azure DevOps
-        logs_container: Contenedor de Streamlit para mostrar logs (opcional)
 
     Returns:
         str: Markdown con imágenes insertadas
@@ -2300,22 +2269,13 @@ def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat
     for idx, imagen in enumerate(imagenes, 1):
         placeholder = f"{{{{IMAGE_PLACEHOLDER_{idx}}}}}"
 
-        print(f"\n{'#'*80}")
-        print(f"📸 PROCESANDO IMAGEN {idx}: {imagen['name']}")
-        print(f"{'#'*80}")
+        add_log(f"📸 Procesando imagen {idx}: {imagen['name']}", "info")
 
         # Subir imagen a Azure DevOps
         success, attachment_url = subir_attachment_wiki(
             organization, project, pat, wiki_id,
             imagen['data'], imagen['name']
         )
-
-        print(f"\n{'>'*80}")
-        print(f"🔍 RESULTADO DE SUBIR_ATTACHMENT_WIKI:")
-        print(f"  success: {success} (type: {type(success)})")
-        print(f"  attachment_url: {attachment_url!r} (type: {type(attachment_url)})")
-        print(f"  success and attachment_url: {success and attachment_url}")
-        print(f"{'<'*80}\n")
 
         if success and attachment_url:
             # Reemplazar placeholder con markdown de imagen
@@ -2324,23 +2284,10 @@ def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat
             imagen_markdown = f"![{alt_text}]({attachment_url})"
             markdown_procesado = markdown_procesado.replace(placeholder, imagen_markdown)
 
-            print(f"✅ IMAGEN SUBIDA EXITOSAMENTE: {imagen['name']} → {attachment_url}")
-
-            if logs_container:
-                with logs_container:
-                    st.info(f"📸 Imagen subida: {imagen['name']} → {attachment_url}")
-            else:
-                st.info(f"📸 Imagen subida: {imagen['name']} → {attachment_url}")
+            add_log(f"✅ Imagen subida: {imagen['name']} → {attachment_url[:50]}...", "success")
         else:
             # Si falla, remover el placeholder
-            print(f"❌ FALLO AL SUBIR IMAGEN: {imagen['name']}")
-            print(f"   Razón: success={success}, attachment_url={attachment_url!r}")
-
-            if logs_container:
-                with logs_container:
-                    st.warning(f"⚠️ No se pudo subir {imagen['name']}, se omitirá la imagen")
-            else:
-                st.warning(f"⚠️ No se pudo subir {imagen['name']}, se omitirá la imagen")
+            add_log(f"⚠️ No se pudo subir {imagen['name']}, se omitirá la imagen", "warning")
             markdown_procesado = markdown_procesado.replace(placeholder, "")
 
     return markdown_procesado
@@ -2452,10 +2399,11 @@ else:
 # ==================================================
 # TABS
 # ==================================================
-tab_chat, tab_devops, tab_doc = st.tabs([
+tab_chat, tab_devops, tab_doc, tab_logs = st.tabs([
     "💬 Chat clásico",
     "🎯 Tareas Azure DevOps",
-    "📄 Análisis Documentos"
+    "📄 Análisis Documentos",
+    "📋 Logs"
 ])
 
 # ================= TAB 1: CHAT CLÁSICO =================
@@ -3627,22 +3575,7 @@ with tab_devops:
                         # Mapa para tracking de paths reales de páginas creadas
                         titulo_a_path = {}
 
-                        # Crear expander para logs con scroll
-                        with st.expander("📋 Ver logs de creación (en tiempo real)", expanded=True):
-                            st.markdown("""
-                            <style>
-                            div[data-testid="stExpander"] div[data-testid="stVerticalBlock"] {
-                                max-height: 400px;
-                                overflow-y: auto;
-                                padding: 15px;
-                                background-color: #f8f9fa;
-                                border: 2px solid #dee2e6;
-                                border-radius: 8px;
-                            }
-                            </style>
-                            """, unsafe_allow_html=True)
-
-                            logs_container = st.container()
+                        st.info("📋 Los logs de creación se pueden ver en tiempo real en la pestaña 'Logs'")
 
                         for idx, pagina in enumerate(paginas_ordenadas):
                             progress_bar.progress((idx + 1) / len(paginas_ordenadas))
@@ -3683,8 +3616,7 @@ with tab_devops:
                                     st.session_state.devops_org,
                                     st.session_state.devops_project,
                                     st.session_state.devops_pat,
-                                    st.session_state.selected_wiki_id_crear,
-                                    logs_container  # Pasar el contenedor para logs
+                                    st.session_state.selected_wiki_id_crear
                                 )
 
                             success, result = crear_pagina_wiki_azure(
@@ -3699,12 +3631,10 @@ with tab_devops:
                             if success:
                                 exitos += 1
                                 titulo_a_path[pagina['titulo']] = path
-                                with logs_container:
-                                    st.success(f"✅ Creada: {pagina['titulo']} → {path}")
+                                add_log(f"✅ Creada: {pagina['titulo']} → {path}", "success")
                             else:
                                 errores += 1
-                                with logs_container:
-                                    st.error(f"❌ Error: {pagina['titulo']}")
+                                add_log(f"❌ Error: {pagina['titulo']}", "error")
                                 # Guardar la página fallida con su path calculado
                                 paginas_fallidas_nuevas.append({
                                     "titulo": pagina['titulo'],
@@ -5220,3 +5150,57 @@ Genera el/los work item(s) solicitados siguiendo la plantilla proporcionada y ba
                         value=resultado_generacion,
                         height=300
                     )
+
+# ==================================================
+# TAB 4: LOGS
+# ==================================================
+with tab_logs:
+    st.title("📋 Logs de la Aplicación")
+
+    col1, col2 = st.columns([3, 1])
+
+    with col1:
+        st.markdown("Visualiza en tiempo real todos los logs generados por la aplicación")
+
+    with col2:
+        if st.button("🗑️ Limpiar logs", type="secondary"):
+            clear_logs()
+            st.rerun()
+
+    st.markdown("---")
+
+    # Contenedor de logs con scroll
+    st.markdown("""
+    <style>
+    .log-container {
+        max-height: 600px;
+        overflow-y: auto;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border: 2px solid #dee2e6;
+        border-radius: 8px;
+        font-family: 'Courier New', monospace;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    if not st.session_state.app_logs:
+        st.info("ℹ️ No hay logs aún. Los logs se generarán cuando uses las funcionalidades de la aplicación.")
+    else:
+        # Mostrar logs en orden inverso (más reciente primero)
+        for log in reversed(st.session_state.app_logs):
+            icon = get_log_icon(log["type"])
+            timestamp = log["timestamp"]
+            message = log["message"]
+
+            # Color según tipo de log
+            if log["type"] == "error":
+                st.error(f"{icon} `[{timestamp}]` {message}")
+            elif log["type"] == "success":
+                st.success(f"{icon} `[{timestamp}]` {message}")
+            elif log["type"] == "warning":
+                st.warning(f"{icon} `[{timestamp}]` {message}")
+            elif log["type"] == "debug":
+                st.info(f"{icon} `[{timestamp}]` {message}")
+            else:
+                st.info(f"{icon} `[{timestamp}]` {message}")
