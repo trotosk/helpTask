@@ -2014,14 +2014,22 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
     credentials = f":{pat}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
 
+    # Azure DevOps espera la imagen en Base64
+    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+
     headers = {
         "Authorization": f"Basic {encoded_credentials}",
-        "Content-Type": "application/octet-stream"
+        "Content-Type": "application/json"
+    }
+
+    # El body debe ser JSON con el contenido en base64
+    payload = {
+        "content": image_base64
     }
 
     try:
         # IMPORTANTE: Usar PUT, no POST
-        response = requests.put(url, data=image_bytes, headers=headers, timeout=60)
+        response = requests.put(url, json=payload, headers=headers, timeout=60)
 
         if response.status_code in [200, 201]:
             data = response.json()
@@ -3381,21 +3389,22 @@ with tab_devops:
                         # Mapa para tracking de paths reales de páginas creadas
                         titulo_a_path = {}
 
-                        # Contenedor con scroll para logs
-                        logs_container = st.container()
+                        # Crear expander para logs con scroll
+                        with st.expander("📋 Ver logs de creación (en tiempo real)", expanded=True):
+                            st.markdown("""
+                            <style>
+                            div[data-testid="stExpander"] div[data-testid="stVerticalBlock"] {
+                                max-height: 400px;
+                                overflow-y: auto;
+                                padding: 15px;
+                                background-color: #f8f9fa;
+                                border: 2px solid #dee2e6;
+                                border-radius: 8px;
+                            }
+                            </style>
+                            """, unsafe_allow_html=True)
 
-                        # Agregar CSS para scroll
-                        st.markdown("""
-                        <style>
-                        .stContainer > div {
-                            max-height: 500px;
-                            overflow-y: auto;
-                            padding: 10px;
-                            border: 1px solid #ddd;
-                            border-radius: 5px;
-                        }
-                        </style>
-                        """, unsafe_allow_html=True)
+                            logs_container = st.container()
 
                         for idx, pagina in enumerate(paginas_ordenadas):
                             progress_bar.progress((idx + 1) / len(paginas_ordenadas))
