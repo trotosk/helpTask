@@ -2021,24 +2021,55 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
     # Método 1: PUT con Base64 string (application/octet-stream)
     try:
         st.write(f"🔍 **Método 1** - PUT con Base64 string + octet-stream...")
+        print(f"\n{'='*80}")
+        print(f"🔍 MÉTODO 1 - PUT con Base64 string + octet-stream")
+        print(f"{'='*80}")
+
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
             "Content-Type": "application/octet-stream"
         }
+
         # Convertir bytes a Base64 string
         base64_content = base64.b64encode(image_bytes).decode('utf-8')
+
+        # Log del REQUEST
+        print(f"\n📤 REQUEST:")
+        print(f"  URL: {url}")
+        print(f"  Method: PUT")
+        print(f"  Headers: {json.dumps({k: v if k != 'Authorization' else 'Basic ***' for k, v in headers.items()}, indent=2)}")
+        print(f"  Data Type: Base64 string")
+        print(f"  Data Size: {len(base64_content)} chars (original bytes: {len(image_bytes)})")
+        print(f"  Data Preview: {base64_content[:100]}...")
+
         response = requests.put(url, data=base64_content, headers=headers, timeout=60)
+
+        # Log del RESPONSE
+        print(f"\n📥 RESPONSE:")
+        print(f"  Status Code: {response.status_code}")
+        print(f"  Headers: {json.dumps(dict(response.headers), indent=2)}")
+
+        try:
+            response_json = response.json()
+            print(f"  JSON Body: {json.dumps(response_json, indent=2)}")
+        except:
+            print(f"  Text Body: {response.text[:500]}")
 
         st.write(f"  → Status: {response.status_code}")
         if response.status_code not in [200, 201]:
             error_msg = response.text[:300] if response.text else "Sin mensaje"
             st.write(f"  → Error: {error_msg}")
+            print(f"\n❌ ERROR: {error_msg}")
             errores.append(f"Método 1 (PUT Base64): {response.status_code} - {error_msg[:100]}")
         else:
             st.success(f"  ✅ Método 1 funcionó!")
+            print(f"\n✅ Método 1 funcionó! Procesando respuesta...")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
         st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        print(f"\n❌ EXCEPCIÓN en Método 1: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         errores.append(f"Método 1 (PUT Base64): Excepción - {str(e)[:100]}")
 
     # Método 2: POST con bytes binarios directos
@@ -2157,8 +2188,36 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
 def _procesar_respuesta_attachment(response, image_name):
     """Helper para procesar la respuesta del attachment"""
     try:
-        data = response.json()
+        # DEBUG: Mostrar respuesta completa
+        st.write(f"🔍 **DEBUG - Procesando respuesta para {image_name}**")
+        st.write(f"  Status Code: {response.status_code}")
+
+        print(f"\n{'='*80}")
+        print(f"🔍 PROCESANDO RESPUESTA PARA: {image_name}")
+        print(f"{'='*80}")
+        print(f"Status Code: {response.status_code}")
+
+        # Intentar parsear JSON
+        try:
+            data = response.json()
+            st.write(f"  JSON Response: {json.dumps(data, indent=2)[:500]}")
+            print(f"\n📋 JSON RESPONSE COMPLETO:")
+            print(json.dumps(data, indent=2))
+        except:
+            st.write(f"  ⚠️ No hay JSON en la respuesta")
+            st.write(f"  Response Text: {response.text[:300]}")
+            print(f"\n⚠️ NO HAY JSON EN LA RESPUESTA")
+            print(f"Response Text: {response.text[:500]}")
+            data = {}
+
+        # Mostrar headers
+        st.write(f"  Headers: {dict(response.headers)}")
+        print(f"\n📋 RESPONSE HEADERS:")
+        print(json.dumps(dict(response.headers), indent=2))
+
         attachment_url = data.get('url', '')
+        st.write(f"  URL extraída: '{attachment_url}'")
+        print(f"\n🔗 URL extraída del JSON: '{attachment_url}'")
 
         # Azure DevOps devuelve una URL de API, necesitamos convertirla a URL pública
         # Formato típico: /.attachments/{hash}/{filename}
@@ -2166,15 +2225,54 @@ def _procesar_respuesta_attachment(response, image_name):
             parts = attachment_url.split('/attachments/')
             if len(parts) > 1:
                 attachment_path = f"/.attachments/{parts[1]}"
+                st.write(f"  ✅ Path generado: {attachment_path}")
+                print(f"✅ Path generado desde URL: {attachment_path}")
+                print(f"{'='*80}\n")
                 return True, attachment_path
 
+        # Intentar con header Location
+        location = response.headers.get('Location', '')
+        if location:
+            st.write(f"  📍 Location header encontrado: {location}")
+            print(f"📍 Location header encontrado: {location}")
+            if 'attachments' in location:
+                parts = location.split('/attachments/')
+                if len(parts) > 1:
+                    attachment_path = f"/.attachments/{parts[1]}"
+                    st.write(f"  ✅ Path desde Location: {attachment_path}")
+                    print(f"✅ Path generado desde Location: {attachment_path}")
+                    print(f"{'='*80}\n")
+                    return True, attachment_path
+            print(f"✅ Usando Location completo: {location}")
+            print(f"{'='*80}\n")
+            return True, location
+
         # Si no podemos parsear, devolver la URL completa
-        return True, attachment_url
-    except:
+        if attachment_url:
+            st.write(f"  ⚠️ Usando URL completa: {attachment_url}")
+            print(f"⚠️ Usando URL completa: {attachment_url}")
+            print(f"{'='*80}\n")
+            return True, attachment_url
+
+        st.write(f"  ❌ No se pudo extraer ninguna URL")
+        print(f"❌ NO SE PUDO EXTRAER NINGUNA URL")
+        print(f"{'='*80}\n")
+        return False, None
+
+    except Exception as e:
+        st.write(f"  ❌ Excepción en _procesar_respuesta_attachment: {str(e)}")
+        print(f"\n❌ EXCEPCIÓN en _procesar_respuesta_attachment: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         # Si no hay JSON en la respuesta, intentar con headers
         location = response.headers.get('Location', '')
         if location:
+            st.write(f"  📍 Usando Location de fallback: {location}")
+            print(f"📍 Usando Location de fallback: {location}")
+            print(f"{'='*80}\n")
             return True, location
+        print(f"❌ Retornando False, None")
+        print(f"{'='*80}\n")
         return False, None
 
 def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat, wiki_id, logs_container=None):
@@ -2200,11 +2298,22 @@ def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat
     for idx, imagen in enumerate(imagenes, 1):
         placeholder = f"{{{{IMAGE_PLACEHOLDER_{idx}}}}}"
 
+        print(f"\n{'#'*80}")
+        print(f"📸 PROCESANDO IMAGEN {idx}: {imagen['name']}")
+        print(f"{'#'*80}")
+
         # Subir imagen a Azure DevOps
         success, attachment_url = subir_attachment_wiki(
             organization, project, pat, wiki_id,
             imagen['data'], imagen['name']
         )
+
+        print(f"\n{'>'*80}")
+        print(f"🔍 RESULTADO DE SUBIR_ATTACHMENT_WIKI:")
+        print(f"  success: {success} (type: {type(success)})")
+        print(f"  attachment_url: {attachment_url!r} (type: {type(attachment_url)})")
+        print(f"  success and attachment_url: {success and attachment_url}")
+        print(f"{'<'*80}\n")
 
         if success and attachment_url:
             # Reemplazar placeholder con markdown de imagen
@@ -2213,6 +2322,8 @@ def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat
             imagen_markdown = f"![{alt_text}]({attachment_url})"
             markdown_procesado = markdown_procesado.replace(placeholder, imagen_markdown)
 
+            print(f"✅ IMAGEN SUBIDA EXITOSAMENTE: {imagen['name']} → {attachment_url}")
+
             if logs_container:
                 with logs_container:
                     st.info(f"📸 Imagen subida: {imagen['name']} → {attachment_url}")
@@ -2220,6 +2331,9 @@ def procesar_imagenes_en_markdown(markdown, imagenes, organization, project, pat
                 st.info(f"📸 Imagen subida: {imagen['name']} → {attachment_url}")
         else:
             # Si falla, remover el placeholder
+            print(f"❌ FALLO AL SUBIR IMAGEN: {imagen['name']}")
+            print(f"   Razón: success={success}, attachment_url={attachment_url!r}")
+
             if logs_container:
                 with logs_container:
                     st.warning(f"⚠️ No se pudo subir {imagen['name']}, se omitirá la imagen")
