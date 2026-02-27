@@ -2215,9 +2215,11 @@ def _procesar_respuesta_attachment(response, image_name):
         print(f"\n📋 RESPONSE HEADERS:")
         print(json.dumps(dict(response.headers), indent=2))
 
-        attachment_url = data.get('url', '')
+        # Intentar primero 'path' (Project Wiki) y luego 'url' (Code Wiki) como fallback
+        attachment_url = data.get('path', '') or data.get('url', '')
         st.write(f"  URL extraída: '{attachment_url}'")
         print(f"\n🔗 URL extraída del JSON: '{attachment_url}'")
+        print(f"   (Buscó en 'path': {data.get('path', 'N/A')!r}, 'url': {data.get('url', 'N/A')!r})")
 
         # Azure DevOps devuelve una URL de API, necesitamos convertirla a URL pública
         # Formato típico: /.attachments/{hash}/{filename}
@@ -2496,7 +2498,7 @@ with tab_devops:
     # ================= CONFIGURACIÓN COMÚN: WORK ITEMS Y WIKI =================
     if st.session_state.devops_org and st.session_state.devops_project and st.session_state.devops_pat:
         # Configuración de Work Items
-        with st.expander("🎛️ Filtros y Sincronización de Work Items", expanded=not st.session_state.devops_indexed):
+        with st.expander("🎛️ Filtros y Sincronización de Work Items", expanded=False):
             col_filtros1, col_filtros2 = st.columns(2)
 
             with col_filtros1:
@@ -2602,7 +2604,7 @@ with tab_devops:
         st.markdown("---")
 
         # Configuración de Wiki
-        with st.expander("📥 Seleccionar Páginas de Wiki", expanded=not st.session_state.wiki_indexed):
+        with st.expander("📥 Seleccionar Páginas de Wiki", expanded=False):
             col1, col2 = st.columns([2, 1])
 
             with col1:
