@@ -2015,47 +2015,93 @@ def subir_attachment_wiki(organization, project, pat, wiki_id, image_bytes, imag
     credentials = f":{pat}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
 
-    # Método 1: Intentar con bytes binarios directos (application/octet-stream)
+    errores = []  # Colectar errores de cada método
+
+    # Método 1: PUT con bytes binarios directos (application/octet-stream)
     try:
+        st.write(f"🔍 **Método 1** - PUT con bytes binarios...")
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
             "Content-Type": "application/octet-stream"
         }
         response = requests.put(url, data=image_bytes, headers=headers, timeout=60)
 
-        if response.status_code in [200, 201]:
+        st.write(f"  → Status: {response.status_code}")
+        if response.status_code not in [200, 201]:
+            error_msg = response.text[:300] if response.text else "Sin mensaje"
+            st.write(f"  → Error: {error_msg}")
+            errores.append(f"Método 1 (PUT bytes): {response.status_code} - {error_msg[:100]}")
+        else:
+            st.success(f"  ✅ Método 1 funcionó!")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        pass  # Continuar con siguiente método
+        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        errores.append(f"Método 1 (PUT bytes): Excepción - {str(e)[:100]}")
 
-    # Método 2: Intentar con multipart/form-data
+    # Método 2: POST con bytes binarios directos
     try:
+        st.write(f"🔍 **Método 2** - POST con bytes binarios...")
+        headers = {
+            "Authorization": f"Basic {encoded_credentials}",
+            "Content-Type": "application/octet-stream"
+        }
+        response = requests.post(url, data=image_bytes, headers=headers, timeout=60)
+
+        st.write(f"  → Status: {response.status_code}")
+        if response.status_code not in [200, 201]:
+            error_msg = response.text[:300] if response.text else "Sin mensaje"
+            st.write(f"  → Error: {error_msg}")
+            errores.append(f"Método 2 (POST bytes): {response.status_code} - {error_msg[:100]}")
+        else:
+            st.success(f"  ✅ Método 2 funcionó!")
+            return _procesar_respuesta_attachment(response, image_name)
+    except Exception as e:
+        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        errores.append(f"Método 2 (POST bytes): Excepción - {str(e)[:100]}")
+
+    # Método 3: PUT con multipart/form-data
+    try:
+        st.write(f"🔍 **Método 3** - PUT con multipart/form-data...")
         files = {'file': (unique_name, BytesIO(image_bytes), 'application/octet-stream')}
         headers = {"Authorization": f"Basic {encoded_credentials}"}
         response = requests.put(url, files=files, headers=headers, timeout=60)
 
-        if response.status_code in [200, 201]:
+        st.write(f"  → Status: {response.status_code}")
+        if response.status_code not in [200, 201]:
+            error_msg = response.text[:300] if response.text else "Sin mensaje"
+            st.write(f"  → Error: {error_msg}")
+            errores.append(f"Método 3 (PUT multipart): {response.status_code} - {error_msg[:100]}")
+        else:
+            st.success(f"  ✅ Método 3 funcionó!")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        pass  # Continuar con siguiente método
+        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        errores.append(f"Método 3 (PUT multipart): Excepción - {str(e)[:100]}")
 
-    # Método 3: Intentar sin parámetro name en URL (puede estar en Content-Disposition)
+    # Método 4: POST con multipart/form-data
     try:
-        url_alt = f"https://dev.azure.com/{organization}/{project}/_apis/wiki/wikis/{wiki_id}/attachments?api-version=7.1-preview.1"
-        headers = {
-            "Authorization": f"Basic {encoded_credentials}",
-            "Content-Type": "application/octet-stream",
-            "Content-Disposition": f'attachment; filename="{unique_name}"'
-        }
-        response = requests.put(url_alt, data=image_bytes, headers=headers, timeout=60)
+        st.write(f"🔍 **Método 4** - POST con multipart/form-data...")
+        files = {'file': (unique_name, BytesIO(image_bytes), 'application/octet-stream')}
+        headers = {"Authorization": f"Basic {encoded_credentials}"}
+        response = requests.post(url, files=files, headers=headers, timeout=60)
 
-        if response.status_code in [200, 201]:
+        st.write(f"  → Status: {response.status_code}")
+        if response.status_code not in [200, 201]:
+            error_msg = response.text[:300] if response.text else "Sin mensaje"
+            st.write(f"  → Error: {error_msg}")
+            errores.append(f"Método 4 (POST multipart): {response.status_code} - {error_msg[:100]}")
+        else:
+            st.success(f"  ✅ Método 4 funcionó!")
             return _procesar_respuesta_attachment(response, image_name)
     except Exception as e:
-        pass
+        st.write(f"  ❌ Excepción: {str(e)[:100]}")
+        errores.append(f"Método 4 (POST multipart): Excepción - {str(e)[:100]}")
 
-    # Si todos los métodos fallan, mostrar último error
-    st.warning(f"⚠️ No se pudo subir {image_name} - Métodos 1-3 fallaron")
+    # Si todos los métodos fallan, mostrar resumen de errores
+    st.error(f"❌ **Todos los métodos fallaron para {image_name}**")
+    for error in errores:
+        st.write(f"  • {error}")
+
     return False, None
 
 def _procesar_respuesta_attachment(response, image_name):
