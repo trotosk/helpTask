@@ -5303,9 +5303,10 @@ with tab_tilena:
                         )
 
                         # Iniciar sesión
-                        if not api.init_session():
-                            st.error("❌ Error al conectar con Tilena. Verifica tu User Token.")
-                            add_log("Error al conectar con Tilena API", "error")
+                        success, error_msg = api.init_session()
+                        if not success:
+                            st.error(f"❌ Error al conectar con Tilena: {error_msg}")
+                            add_log(f"Error al conectar con Tilena API: {error_msg}", "error")
                         else:
                             add_log("Conexión exitosa con Tilena API", "success")
 
@@ -5444,7 +5445,8 @@ with tab_tilena:
                                         app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
                                     )
 
-                                    if api.init_session():
+                                    success, error_msg = api.init_session()
+                                    if success:
                                         ticket_detail = api.get_ticket(int(ticket_id))
 
                                         if ticket_detail:
@@ -5455,6 +5457,8 @@ with tab_tilena:
                                             st.error("No se pudo obtener el detalle")
 
                                         api.kill_session()
+                                    else:
+                                        st.error(f"❌ Error al conectar con Tilena: {error_msg}")
                                     else:
                                         st.error("Error al conectar")
 

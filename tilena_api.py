@@ -34,12 +34,12 @@ class TilenaAPI:
         self.session_token = None
         self.api_url = f"{self.base_url}/apirest.php"
 
-    def init_session(self) -> bool:
+    def init_session(self) -> tuple[bool, str]:
         """
         Inicia sesión en la API y obtiene el session token
 
         Returns:
-            bool: True si la sesión se inició correctamente
+            tuple: (success: bool, error_message: str)
         """
         headers = {
             "Content-Type": "application/json",
@@ -49,24 +49,44 @@ class TilenaAPI:
         if self.app_token:
             headers["App-Token"] = self.app_token
 
+        url = f"{self.api_url}/initSession"
+
         try:
+            print(f"[DEBUG] Intentando conectar a: {url}")
+            print(f"[DEBUG] Headers: {headers}")
+
             response = requests.get(
-                f"{self.api_url}/initSession",
+                url,
                 headers=headers,
                 timeout=30
             )
 
+            print(f"[DEBUG] Status code: {response.status_code}")
+            print(f"[DEBUG] Response: {response.text}")
+
             if response.status_code == 200:
                 data = response.json()
                 self.session_token = data.get('session_token')
-                return True
+                return True, ""
             else:
-                print(f"Error al iniciar sesión: {response.status_code} - {response.text}")
-                return False
+                error_msg = f"Error HTTP {response.status_code}: {response.text}"
+                print(f"[ERROR] {error_msg}")
+                return False, error_msg
 
+        except requests.exceptions.Timeout:
+            error_msg = f"Timeout al conectar con {url} (30s)"
+            print(f"[ERROR] {error_msg}")
+            return False, error_msg
+        except requests.exceptions.ConnectionError as e:
+            error_msg = f"Error de conexión: No se puede conectar con {url}. Verifica la URL y tu conexión de red. Detalle: {str(e)}"
+            print(f"[ERROR] {error_msg}")
+            return False, error_msg
         except Exception as e:
-            print(f"Error de conexión: {str(e)}")
-            return False
+            error_msg = f"Error inesperado: {type(e).__name__} - {str(e)}"
+            print(f"[ERROR] {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return False, error_msg
 
     def kill_session(self) -> bool:
         """
@@ -117,7 +137,9 @@ class TilenaAPI:
             Dict con la información del ticket o None si hay error
         """
         if not self.session_token:
-            if not self.init_session():
+            success, error_msg = self.init_session()
+            if not success:
+                print(f"[ERROR] No se pudo iniciar sesión: {error_msg}")
                 return None
 
         headers = self._get_headers()
@@ -246,7 +268,9 @@ class TilenaAPI:
             19: Fecha de modificación
         """
         if not self.session_token:
-            if not self.init_session():
+            success, error_msg = self.init_session()
+            if not success:
+                print(f"[ERROR] No se pudo iniciar sesión: {error_msg}")
                 return None
 
         headers = self._get_headers()
@@ -299,7 +323,9 @@ class TilenaAPI:
             Dict con las opciones de búsqueda y sus IDs
         """
         if not self.session_token:
-            if not self.init_session():
+            success, error_msg = self.init_session()
+            if not success:
+                print(f"[ERROR] No se pudo iniciar sesión: {error_msg}")
                 return None
 
         headers = self._get_headers()
