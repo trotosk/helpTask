@@ -5459,8 +5459,6 @@ with tab_tilena:
                                         api.kill_session()
                                     else:
                                         st.error(f"❌ Error al conectar con Tilena: {error_msg}")
-                                    else:
-                                        st.error("Error al conectar")
 
                                 except Exception as e:
                                     st.error(f"Error: {str(e)}")
