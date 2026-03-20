@@ -2,7 +2,7 @@
 Módulo para interactuar con la API de Tilena (GLPI)
 
 Este módulo proporciona funciones para:
-- Autenticación con User Token
+- Autenticación con User Token o Usuario/Contraseña
 - Búsqueda de tickets con filtros avanzados
 - Obtener detalle de tickets
 - Listar opciones de búsqueda
@@ -14,25 +14,41 @@ import requests
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import json
+import base64
 
 
 class TilenaAPI:
     """Cliente para la API de Tilena/GLPI"""
 
-    def __init__(self, base_url: str, user_token: str, app_token: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: str,
+        user_token: Optional[str] = None,
+        app_token: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None
+    ):
         """
         Inicializa el cliente de Tilena API
 
         Args:
             base_url: URL base de Tilena (ej: https://tilena.fooddeliverybrands.com)
-            user_token: Token de usuario para autenticación
+            user_token: Token de usuario para autenticación (opcional si se usa username/password)
             app_token: Token de aplicación (opcional)
+            username: Nombre de usuario para autenticación (alternativa a user_token)
+            password: Contraseña para autenticación (requerida si se usa username)
         """
         self.base_url = base_url.rstrip('/')
         self.user_token = user_token
         self.app_token = app_token
+        self.username = username
+        self.password = password
         self.session_token = None
         self.api_url = f"{self.base_url}/apirest.php"
+
+        # Validar que se proporcione al menos un método de autenticación
+        if not user_token and not (username and password):
+            raise ValueError("Debes proporcionar user_token o username+password")
 
     def init_session(self) -> tuple[bool, str]:
         """
@@ -42,9 +58,21 @@ class TilenaAPI:
             tuple: (success: bool, error_message: str)
         """
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"user_token {self.user_token}"
+            "Content-Type": "application/json"
         }
+
+        # Autenticación por usuario/contraseña
+        if self.username and self.password:
+            # GLPI API acepta usuario/contraseña en base64
+            auth_string = f"{self.username}:{self.password}"
+            auth_bytes = auth_string.encode('utf-8')
+            auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
+            headers["Authorization"] = f"Basic {auth_b64}"
+            print(f"[DEBUG] Usando autenticación Basic (usuario/contraseña)")
+        # Autenticación por user_token
+        elif self.user_token:
+            headers["Authorization"] = f"user_token {self.user_token}"
+            print(f"[DEBUG] Usando autenticación por user_token")
 
         if self.app_token:
             headers["App-Token"] = self.app_token
@@ -53,7 +81,7 @@ class TilenaAPI:
 
         try:
             print(f"[DEBUG] Intentando conectar a: {url}")
-            print(f"[DEBUG] Headers: {headers}")
+            print(f"[DEBUG] Headers (sin credenciales): {{{k: v for k, v in headers.items() if k != 'Authorization'}}}")
 
             response = requests.get(
                 url,

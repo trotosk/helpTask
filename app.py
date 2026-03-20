@@ -120,8 +120,11 @@ defaults = {
     "wiki_paginas_fallidas": [],
     # Estado para Tilena
     "tilena_url": "",
+    "tilena_auth_method": "userpass",  # "token" o "userpass"
     "tilena_user_token": "",
     "tilena_app_token": "",
+    "tilena_username": "",
+    "tilena_password": "",
     "tilena_tickets": [],
     "tilena_embeddings": None,
     "tilena_indexed": False,
@@ -2416,33 +2419,91 @@ with st.sidebar.expander("Configurar conexión", expanded=False):
         placeholder="ej: https://tilena.fooddeliverybrands.com",
         key="sidebar_tilena_url_input"
     )
-    tilena_user_token_input = st.text_input(
-        "User Token",
-        value=st.session_state.tilena_user_token,
-        type="password",
-        help="Token de usuario (Administration > Users > Remote access keys > API Token)",
-        key="sidebar_tilena_user_token_input"
+
+    # Selector de método de autenticación
+    auth_method = st.radio(
+        "Método de autenticación",
+        options=["userpass", "token"],
+        format_func=lambda x: "👤 Usuario y Contraseña" if x == "userpass" else "🔑 User Token",
+        index=0 if st.session_state.tilena_auth_method == "userpass" else 1,
+        key="sidebar_tilena_auth_method",
+        help="Si la API está desactivada, usa Usuario y Contraseña"
     )
-    tilena_app_token_input = st.text_input(
-        "App Token (opcional)",
-        value=st.session_state.tilena_app_token,
-        type="password",
-        help="Token de aplicación (opcional)",
-        key="sidebar_tilena_app_token_input"
-    )
+
+    if auth_method == "userpass":
+        tilena_username_input = st.text_input(
+            "Usuario",
+            value=st.session_state.tilena_username,
+            placeholder="tu_usuario",
+            key="sidebar_tilena_username_input"
+        )
+        tilena_password_input = st.text_input(
+            "Contraseña",
+            value=st.session_state.tilena_password,
+            type="password",
+            key="sidebar_tilena_password_input"
+        )
+        tilena_app_token_input = st.text_input(
+            "App Token (opcional)",
+            value=st.session_state.tilena_app_token,
+            type="password",
+            help="Token de aplicación (opcional)",
+            key="sidebar_tilena_app_token_input_userpass"
+        )
+    else:
+        tilena_user_token_input = st.text_input(
+            "User Token",
+            value=st.session_state.tilena_user_token,
+            type="password",
+            help="Token de usuario (Administration > Users > Remote access keys > API Token)",
+            key="sidebar_tilena_user_token_input"
+        )
+        tilena_app_token_input = st.text_input(
+            "App Token (opcional)",
+            value=st.session_state.tilena_app_token,
+            type="password",
+            help="Token de aplicación (opcional)",
+            key="sidebar_tilena_app_token_input_token"
+        )
 
     if st.button("💾 Guardar", use_container_width=True, key="sidebar_save_tilena"):
-        if tilena_url_input and tilena_user_token_input:
-            st.session_state.tilena_url = tilena_url_input
-            st.session_state.tilena_user_token = tilena_user_token_input
-            st.session_state.tilena_app_token = tilena_app_token_input
-            st.success("✅ Guardado")
-            st.rerun()
+        if tilena_url_input:
+            if auth_method == "userpass":
+                if tilena_username_input and tilena_password_input:
+                    st.session_state.tilena_url = tilena_url_input
+                    st.session_state.tilena_auth_method = "userpass"
+                    st.session_state.tilena_username = tilena_username_input
+                    st.session_state.tilena_password = tilena_password_input
+                    st.session_state.tilena_app_token = tilena_app_token_input
+                    st.success("✅ Guardado (Usuario/Contraseña)")
+                    st.rerun()
+                else:
+                    st.error("❌ Completa usuario y contraseña")
+            else:
+                if tilena_user_token_input:
+                    st.session_state.tilena_url = tilena_url_input
+                    st.session_state.tilena_auth_method = "token"
+                    st.session_state.tilena_user_token = tilena_user_token_input
+                    st.session_state.tilena_app_token = tilena_app_token_input
+                    st.success("✅ Guardado (User Token)")
+                    st.rerun()
+                else:
+                    st.error("❌ Completa el User Token")
         else:
-            st.error("❌ Completa URL y User Token")
+            st.error("❌ Completa la URL")
 
-if st.session_state.tilena_url and st.session_state.tilena_user_token:
-    st.sidebar.success(f"✅ Tilena configurado")
+# Mostrar estado de conexión
+if st.session_state.tilena_url:
+    if st.session_state.tilena_auth_method == "userpass":
+        if st.session_state.tilena_username and st.session_state.tilena_password:
+            st.sidebar.success(f"✅ Tilena configurado (Usuario: {st.session_state.tilena_username})")
+        else:
+            st.sidebar.info("ℹ️ Configura Tilena para consultar tickets")
+    else:
+        if st.session_state.tilena_user_token:
+            st.sidebar.success(f"✅ Tilena configurado (User Token)")
+        else:
+            st.sidebar.info("ℹ️ Configura Tilena para consultar tickets")
 else:
     st.sidebar.info("ℹ️ Configura Tilena para consultar tickets")
 
@@ -5206,10 +5267,22 @@ with tab_tilena:
     st.markdown("Consulta y analiza tickets de Tilena usando IA")
 
     # Verificar conexión
-    if not st.session_state.tilena_url or not st.session_state.tilena_user_token:
+    tilena_configured = False
+    if st.session_state.tilena_url:
+        if st.session_state.tilena_auth_method == "userpass":
+            tilena_configured = st.session_state.tilena_username and st.session_state.tilena_password
+        else:
+            tilena_configured = st.session_state.tilena_user_token
+
+    if not tilena_configured:
         st.info("ℹ️ **Configura Tilena en el sidebar** (⚙️ Configuración → 🎫 Tilena)")
         st.markdown("""
-        **Cómo obtener tu User Token:**
+        **Dos opciones para conectar:**
+
+        **Opción 1: Usuario y Contraseña** (recomendado si la API está desactivada)
+        - Usa tu usuario y contraseña de Tilena
+
+        **Opción 2: User Token**
         1. Accede a Tilena
         2. Ve a: **Administration > Users > Tu Usuario**
         3. Pestaña **User**
@@ -5229,7 +5302,15 @@ with tab_tilena:
     with subtab_buscar:
         st.subheader("🔍 Buscar Tickets")
 
-        if not st.session_state.tilena_url or not st.session_state.tilena_user_token:
+        # Verificar si está configurado
+        tilena_ready = False
+        if st.session_state.tilena_url:
+            if st.session_state.tilena_auth_method == "userpass":
+                tilena_ready = st.session_state.tilena_username and st.session_state.tilena_password
+            else:
+                tilena_ready = st.session_state.tilena_user_token
+
+        if not tilena_ready:
             st.warning("⚠️ Configura Tilena en el sidebar primero")
         else:
             # Formulario de búsqueda
@@ -5295,12 +5376,20 @@ with tab_tilena:
             if submit_search or submit_index:
                 with st.spinner("🔍 Buscando tickets en Tilena..."):
                     try:
-                        # Crear cliente API
-                        api = TilenaAPI(
-                            base_url=st.session_state.tilena_url,
-                            user_token=st.session_state.tilena_user_token,
-                            app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
-                        )
+                        # Crear cliente API según método de autenticación
+                        if st.session_state.tilena_auth_method == "userpass":
+                            api = TilenaAPI(
+                                base_url=st.session_state.tilena_url,
+                                username=st.session_state.tilena_username,
+                                password=st.session_state.tilena_password,
+                                app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
+                            )
+                        else:
+                            api = TilenaAPI(
+                                base_url=st.session_state.tilena_url,
+                                user_token=st.session_state.tilena_user_token,
+                                app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
+                            )
 
                         # Iniciar sesión
                         success, error_msg = api.init_session()
@@ -5439,11 +5528,20 @@ with tab_tilena:
                         if st.button(f"👁️ Ver detalle completo", key=f"detail_{ticket_id}"):
                             with st.spinner("Cargando detalle..."):
                                 try:
-                                    api = TilenaAPI(
-                                        base_url=st.session_state.tilena_url,
-                                        user_token=st.session_state.tilena_user_token,
-                                        app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
-                                    )
+                                    # Crear cliente API según método de autenticación
+                                    if st.session_state.tilena_auth_method == "userpass":
+                                        api = TilenaAPI(
+                                            base_url=st.session_state.tilena_url,
+                                            username=st.session_state.tilena_username,
+                                            password=st.session_state.tilena_password,
+                                            app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
+                                        )
+                                    else:
+                                        api = TilenaAPI(
+                                            base_url=st.session_state.tilena_url,
+                                            user_token=st.session_state.tilena_user_token,
+                                            app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
+                                        )
 
                                     success, error_msg = api.init_session()
                                     if success:
