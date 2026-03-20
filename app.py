@@ -14,6 +14,7 @@ import docx
 from io import BytesIO
 import PyPDF2
 import re
+from tilena_api import TilenaAPI, SEARCH_FIELDS, TICKET_STATUS, format_ticket_for_display
 
 # ==================================================
 # USUARIOS FIJOS
@@ -116,7 +117,16 @@ defaults = {
     "wiki_create_pagina_padre": "",
     "wiki_create_ready_to_create": False,
     # Estado para páginas wiki con error (reintentar)
-    "wiki_paginas_fallidas": []
+    "wiki_paginas_fallidas": [],
+    # Estado para Tilena
+    "tilena_url": "",
+    "tilena_user_token": "",
+    "tilena_app_token": "",
+    "tilena_tickets": [],
+    "tilena_embeddings": None,
+    "tilena_indexed": False,
+    "tilena_top_k": 5,
+    "tilena_messages": [],
 }
 
 for k, v in defaults.items():
@@ -2396,13 +2406,54 @@ if st.session_state.devops_org and st.session_state.devops_project and st.sessio
 else:
     st.sidebar.info("ℹ️ Configura Azure DevOps para usar todas las funcionalidades")
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎫 Tilena")
+
+with st.sidebar.expander("Configurar conexión", expanded=False):
+    tilena_url_input = st.text_input(
+        "URL de Tilena",
+        value=st.session_state.tilena_url if st.session_state.tilena_url else "https://tilena.fooddeliverybrands.com",
+        placeholder="ej: https://tilena.fooddeliverybrands.com",
+        key="sidebar_tilena_url_input"
+    )
+    tilena_user_token_input = st.text_input(
+        "User Token",
+        value=st.session_state.tilena_user_token,
+        type="password",
+        help="Token de usuario (Administration > Users > Remote access keys > API Token)",
+        key="sidebar_tilena_user_token_input"
+    )
+    tilena_app_token_input = st.text_input(
+        "App Token (opcional)",
+        value=st.session_state.tilena_app_token,
+        type="password",
+        help="Token de aplicación (opcional)",
+        key="sidebar_tilena_app_token_input"
+    )
+
+    if st.button("💾 Guardar", use_container_width=True, key="sidebar_save_tilena"):
+        if tilena_url_input and tilena_user_token_input:
+            st.session_state.tilena_url = tilena_url_input
+            st.session_state.tilena_user_token = tilena_user_token_input
+            st.session_state.tilena_app_token = tilena_app_token_input
+            st.success("✅ Guardado")
+            st.rerun()
+        else:
+            st.error("❌ Completa URL y User Token")
+
+if st.session_state.tilena_url and st.session_state.tilena_user_token:
+    st.sidebar.success(f"✅ Tilena configurado")
+else:
+    st.sidebar.info("ℹ️ Configura Tilena para consultar tickets")
+
 # ==================================================
 # TABS
 # ==================================================
-tab_chat, tab_devops, tab_doc, tab_logs = st.tabs([
+tab_chat, tab_devops, tab_doc, tab_tilena, tab_logs = st.tabs([
     "💬 Chat clásico",
     "🎯 Tareas Azure DevOps",
     "📄 Análisis Documentos",
+    "🎫 Tilena",
     "📊 Monitor Log"
 ])
 
@@ -5148,7 +5199,377 @@ Genera el/los work item(s) solicitados siguiendo la plantilla proporcionada y ba
                     )
 
 # ==================================================
-# TAB 4: LOGS
+# TAB 4: TILENA
+# ==================================================
+with tab_tilena:
+    st.title("🎫 Tilena - Gestión de Tickets")
+    st.markdown("Consulta y analiza tickets de Tilena usando IA")
+
+    # Verificar conexión
+    if not st.session_state.tilena_url or not st.session_state.tilena_user_token:
+        st.info("ℹ️ **Configura Tilena en el sidebar** (⚙️ Configuración → 🎫 Tilena)")
+        st.markdown("""
+        **Cómo obtener tu User Token:**
+        1. Accede a Tilena
+        2. Ve a: **Administration > Users > Tu Usuario**
+        3. Pestaña **User**
+        4. Sección **Remote access keys**
+        5. Copia el **API Token**
+        """)
+
+    st.markdown("---")
+
+    # Crear subtabs
+    subtab_buscar, subtab_consultar = st.tabs([
+        "🔍 Buscar Tickets",
+        "💬 Consultas IA sobre Tickets"
+    ])
+
+    # ================= SUBTAB 1: Buscar Tickets =================
+    with subtab_buscar:
+        st.subheader("🔍 Buscar Tickets")
+
+        if not st.session_state.tilena_url or not st.session_state.tilena_user_token:
+            st.warning("⚠️ Configura Tilena en el sidebar primero")
+        else:
+            # Formulario de búsqueda
+            with st.form("tilena_search_form"):
+                st.markdown("### Filtros de búsqueda")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    search_title = st.text_input(
+                        "🔤 Título contiene:",
+                        placeholder="Buscar por título..."
+                    )
+
+                    search_status = st.multiselect(
+                        "📊 Estado:",
+                        options=list(TICKET_STATUS.keys()),
+                        format_func=lambda x: f"{TICKET_STATUS[x]} ({x})",
+                        help="Selecciona uno o más estados"
+                    )
+
+                    search_id = st.text_input(
+                        "🆔 ID del Ticket:",
+                        placeholder="12345"
+                    )
+
+                with col2:
+                    search_limit = st.number_input(
+                        "📊 Cantidad de tickets:",
+                        min_value=1,
+                        max_value=200,
+                        value=50,
+                        help="Máximo de tickets a traer"
+                    )
+
+                    search_sort = st.selectbox(
+                        "🔽 Ordenar por:",
+                        options=[
+                            ("19", "Fecha de modificación (más reciente)"),
+                            ("15", "Fecha de apertura (más reciente)"),
+                            ("1", "Título"),
+                        ],
+                        format_func=lambda x: x[1]
+                    )
+
+                col_btn1, col_btn2 = st.columns([1, 1])
+
+                with col_btn1:
+                    submit_search = st.form_submit_button(
+                        "🔍 Buscar Tickets",
+                        use_container_width=True,
+                        type="primary"
+                    )
+
+                with col_btn2:
+                    submit_index = st.form_submit_button(
+                        "🧠 Indexar para IA",
+                        use_container_width=True,
+                        help="Indexa los tickets encontrados para hacer consultas con IA"
+                    )
+
+            # Procesar búsqueda
+            if submit_search or submit_index:
+                with st.spinner("🔍 Buscando tickets en Tilena..."):
+                    try:
+                        # Crear cliente API
+                        api = TilenaAPI(
+                            base_url=st.session_state.tilena_url,
+                            user_token=st.session_state.tilena_user_token,
+                            app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
+                        )
+
+                        # Iniciar sesión
+                        if not api.init_session():
+                            st.error("❌ Error al conectar con Tilena. Verifica tu User Token.")
+                            add_log("Error al conectar con Tilena API", "error")
+                        else:
+                            add_log("Conexión exitosa con Tilena API", "success")
+
+                            # Construir criterios de búsqueda
+                            criteria = []
+
+                            if search_title:
+                                criteria.append({
+                                    "field": SEARCH_FIELDS["titulo"],
+                                    "searchtype": "contains",
+                                    "value": search_title
+                                })
+
+                            if search_id:
+                                if criteria:
+                                    criteria.append({"link": "AND"})
+                                criteria.append({
+                                    "field": 2,  # ID field
+                                    "searchtype": "equals",
+                                    "value": search_id
+                                })
+
+                            if search_status:
+                                for idx, status in enumerate(search_status):
+                                    if criteria or idx > 0:
+                                        criteria.append({"link": "OR"})
+                                    criteria.append({
+                                        "field": SEARCH_FIELDS["estado"],
+                                        "searchtype": "equals",
+                                        "value": status
+                                    })
+
+                            # Realizar búsqueda
+                            tickets = api.search_tickets(
+                                criteria=criteria if criteria else None,
+                                range_start=0,
+                                range_end=search_limit - 1,
+                                sort=int(search_sort[0]),
+                                order="DESC"
+                            )
+
+                            if tickets is not None:
+                                st.session_state.tilena_tickets = tickets
+                                add_log(f"Se encontraron {len(tickets)} tickets", "success")
+
+                                # Si se pidió indexar
+                                if submit_index:
+                                    with st.spinner("🧠 Indexando tickets para IA..."):
+                                        if len(tickets) == 0:
+                                            st.warning("⚠️ No hay tickets para indexar")
+                                        else:
+                                            # Crear modelo de embeddings si no existe
+                                            if st.session_state.embedding_model is None:
+                                                st.session_state.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+                                            # Preparar textos para embeddings
+                                            textos = []
+                                            for ticket in tickets:
+                                                # Obtener detalle completo del ticket
+                                                ticket_detail = api.get_ticket(ticket.get('2'))  # ID del ticket
+                                                if ticket_detail:
+                                                    texto = f"""
+                                                    ID: {ticket_detail.get('id', 'N/A')}
+                                                    Título: {ticket_detail.get('name', 'Sin título')}
+                                                    Estado: {TICKET_STATUS.get(ticket_detail.get('status', 1), 'Desconocido')}
+                                                    Fecha: {ticket_detail.get('date', 'N/A')}
+                                                    Descripción: {ticket_detail.get('content', 'Sin descripción')}
+                                                    """
+                                                    textos.append(texto)
+                                                else:
+                                                    # Usar datos básicos si no se puede obtener detalle
+                                                    texto = f"""
+                                                    ID: {ticket.get('2', 'N/A')}
+                                                    Título: {ticket.get('1', 'Sin título')}
+                                                    Estado: {ticket.get('12', 'Desconocido')}
+                                                    """
+                                                    textos.append(texto)
+
+                                            # Generar embeddings
+                                            embeddings = st.session_state.embedding_model.encode(textos)
+                                            st.session_state.tilena_embeddings = embeddings
+                                            st.session_state.tilena_indexed = True
+
+                                            add_log(f"Indexados {len(textos)} tickets para consultas IA", "success")
+                                            st.success(f"✅ {len(textos)} tickets indexados para consultas con IA")
+
+                                st.success(f"✅ Se encontraron {len(tickets)} tickets")
+                            else:
+                                st.error("❌ Error al buscar tickets")
+                                add_log("Error al buscar tickets", "error")
+
+                            # Cerrar sesión
+                            api.kill_session()
+
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+                        add_log(f"Error en búsqueda de Tilena: {str(e)}", "error")
+
+            # Mostrar resultados
+            if st.session_state.tilena_tickets:
+                st.markdown("---")
+                st.markdown(f"### 📋 Resultados ({len(st.session_state.tilena_tickets)} tickets)")
+
+                # Indicador de indexación
+                if st.session_state.tilena_indexed:
+                    st.success("🧠 Tickets indexados - Puedes hacer consultas IA en la pestaña 'Consultas IA sobre Tickets'")
+
+                # Mostrar tickets en tabla
+                for idx, ticket in enumerate(st.session_state.tilena_tickets, 1):
+                    ticket_id = ticket.get('2', 'N/A')
+                    ticket_title = ticket.get('1', 'Sin título')
+                    ticket_status = ticket.get('12', 'Desconocido')
+
+                    with st.expander(f"#{ticket_id} - {ticket_title}", expanded=False):
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.markdown(f"**ID:** {ticket_id}")
+                            st.markdown(f"**Estado:** {ticket_status}")
+                            st.markdown(f"**Solicitante:** {ticket.get('4', 'N/A')}")
+                            st.markdown(f"**Asignado a:** {ticket.get('5', 'N/A')}")
+
+                        with col2:
+                            st.markdown(f"**Fecha apertura:** {ticket.get('15', 'N/A')}")
+                            st.markdown(f"**Última modificación:** {ticket.get('19', 'N/A')}")
+                            st.markdown(f"**Categoría:** {ticket.get('14', 'N/A')}")
+                            st.markdown(f"**Entidad:** {ticket.get('80', 'N/A')}")
+
+                        # Botón para ver detalle completo
+                        if st.button(f"👁️ Ver detalle completo", key=f"detail_{ticket_id}"):
+                            with st.spinner("Cargando detalle..."):
+                                try:
+                                    api = TilenaAPI(
+                                        base_url=st.session_state.tilena_url,
+                                        user_token=st.session_state.tilena_user_token,
+                                        app_token=st.session_state.tilena_app_token if st.session_state.tilena_app_token else None
+                                    )
+
+                                    if api.init_session():
+                                        ticket_detail = api.get_ticket(int(ticket_id))
+
+                                        if ticket_detail:
+                                            st.markdown("---")
+                                            st.markdown("### 📄 Detalle Completo")
+                                            st.json(ticket_detail)
+                                        else:
+                                            st.error("No se pudo obtener el detalle")
+
+                                        api.kill_session()
+                                    else:
+                                        st.error("Error al conectar")
+
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+
+    # ================= SUBTAB 2: Consultas IA =================
+    with subtab_consultar:
+        st.subheader("💬 Consultas IA sobre Tickets")
+
+        if not st.session_state.tilena_indexed:
+            st.warning("⚠️ Primero debes buscar e indexar tickets en la pestaña 'Buscar Tickets'")
+            st.info("👉 Usa el botón '🧠 Indexar para IA' después de buscar tickets")
+        else:
+            st.success(f"✅ {len(st.session_state.tilena_tickets)} tickets indexados y listos para consultas")
+
+            # Configuración
+            with st.expander("⚙️ Configuración de búsqueda", expanded=False):
+                st.session_state.tilena_top_k = st.slider(
+                    "🔢 Cantidad de tickets similares a usar",
+                    min_value=1,
+                    max_value=20,
+                    value=st.session_state.tilena_top_k,
+                    help="Número de tickets más relevantes a incluir en el contexto"
+                )
+
+            st.markdown("---")
+
+            # Historial de chat
+            for msg in st.session_state.tilena_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            # Input de chat
+            if prompt := st.chat_input("Pregunta sobre los tickets indexados..."):
+                # Agregar mensaje del usuario
+                st.session_state.tilena_messages.append({"role": "user", "content": prompt})
+
+                with st.spinner("🤖 La IA está analizando los tickets..."):
+                    try:
+                        # Buscar tickets similares usando embeddings
+                        query_embedding = st.session_state.embedding_model.encode([prompt])[0]
+
+                        # Calcular similitudes
+                        from numpy.linalg import norm
+                        similitudes = []
+                        for idx, ticket_emb in enumerate(st.session_state.tilena_embeddings):
+                            similitud = np.dot(query_embedding, ticket_emb) / (norm(query_embedding) * norm(ticket_emb))
+                            similitudes.append((idx, similitud))
+
+                        # Ordenar por similitud
+                        similitudes.sort(key=lambda x: x[1], reverse=True)
+                        top_indices = [idx for idx, _ in similitudes[:st.session_state.tilena_top_k]]
+
+                        # Construir contexto con tickets relevantes
+                        contexto_tickets = []
+                        for idx in top_indices:
+                            ticket = st.session_state.tilena_tickets[idx]
+                            ticket_id = ticket.get('2', 'N/A')
+                            ticket_title = ticket.get('1', 'Sin título')
+                            ticket_status = ticket.get('12', 'Desconocido')
+
+                            contexto_tickets.append(f"""
+                            Ticket #{ticket_id}:
+                            - Título: {ticket_title}
+                            - Estado: {ticket_status}
+                            - Solicitante: {ticket.get('4', 'N/A')}
+                            - Asignado: {ticket.get('5', 'N/A')}
+                            - Fecha: {ticket.get('15', 'N/A')}
+                            - Categoría: {ticket.get('14', 'N/A')}
+                            """)
+
+                        contexto_completo = "\n".join(contexto_tickets)
+
+                        # Preparar prompt para la IA
+                        prompt_final = f"""Tienes acceso a información de tickets de Tilena. A continuación te proporciono los {st.session_state.tilena_top_k} tickets más relevantes para la consulta del usuario:
+
+{contexto_completo}
+
+Consulta del usuario: {prompt}
+
+Por favor, responde basándote en la información de los tickets proporcionados. Si la pregunta no se puede responder con la información disponible, indícalo claramente."""
+
+                        payload = {
+                            "model": st.session_state.model,
+                            "messages": st.session_state.tilena_messages[:-1] + [
+                                {"role": "user", "content": prompt_final}
+                            ]
+                        }
+
+                        if st.session_state.include_temp:
+                            payload["temperature"] = st.session_state.temperature
+                        if st.session_state.include_tokens:
+                            payload["max_tokens"] = st.session_state.max_tokens
+
+                        # Llamar a la IA
+                        answer = call_ia(payload)
+
+                        # Agregar respuesta
+                        st.session_state.tilena_messages.append({"role": "assistant", "content": answer})
+
+                        add_log(f"Consulta IA sobre Tilena: {prompt[:50]}...", "info")
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+                        add_log(f"Error en consulta IA Tilena: {str(e)}", "error")
+
+            # Botón para limpiar chat
+            if st.button("🗑️ Limpiar chat"):
+                st.session_state.tilena_messages = []
+                st.rerun()
+
+# ==================================================
+# TAB 5: LOGS
 # ==================================================
 with tab_logs:
     st.title("📊 Monitor Log")
