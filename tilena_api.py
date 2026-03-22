@@ -81,7 +81,8 @@ class TilenaAPI:
 
         try:
             print(f"[DEBUG] Intentando conectar a: {url}")
-            print(f"[DEBUG] Headers (sin credenciales): {{{k: v for k, v in headers.items() if k != 'Authorization'}}}")
+            headers_safe = {k: v for k, v in headers.items() if k != 'Authorization'}
+            print(f"[DEBUG] Headers (sin credenciales): {headers_safe}")
 
             response = requests.get(
                 url,
