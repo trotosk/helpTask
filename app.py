@@ -2731,7 +2731,7 @@ with tab_devops:
                 # Filtro de estados
                 work_item_states = st.multiselect(
                     "Estados (opcional)",
-                    options=["New", "Active", "Resolved", "Closed", "Removed", "In Progress", "To Do", "Done", "Ready", "Committed"],
+                    options=["New", "In Analysis", "Ready for Development", "In Progress", "Code Review", "Ready for QA", "In Testing", "Ready for STG", "Deployed to STG", "In Testing STG", "Blocked", "Ready for Release", "Done", "Descoped"],
                     default=[],
                     help="Deja vacío para incluir todos los estados (excepto Removed)"
                 )
@@ -2749,7 +2749,7 @@ with tab_devops:
                     "Límite de items a traer",
                     min_value=50,
                     max_value=1000,
-                    value=200,
+                    value=400,
                     step=50,
                     help="Máximo de work items a sincronizar"
                 )
@@ -2763,30 +2763,6 @@ with tab_devops:
                     help="Número de items similares para enviar a Frida"
                 )
 
-                # Filtro de tipo de fecha
-                fecha_tipo = st.selectbox(
-                    "Filtrar por fecha de:",
-                    options=["ChangedDate", "CreatedDate"],
-                    index=0,
-                    format_func=lambda x: "Modificación" if x == "ChangedDate" else "Creación",
-                    help="Selecciona el tipo de fecha para filtrar"
-                )
-
-                # Filtros de rango de fechas
-                col_fecha1, col_fecha2 = st.columns(2)
-                with col_fecha1:
-                    fecha_inicio_input = st.date_input(
-                        "Desde (opcional)",
-                        value=None,
-                        help="Fecha de inicio del rango"
-                    )
-                with col_fecha2:
-                    fecha_fin_input = st.date_input(
-                        "Hasta (opcional)",
-                        value=None,
-                        help="Fecha de fin del rango"
-                    )
-
             st.markdown("---")
 
             col_btn1, col_btn2 = st.columns([3, 1])
@@ -2796,10 +2772,6 @@ with tab_devops:
                         st.error("❌ Selecciona al menos un tipo de work item")
                     else:
                         with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
-                            # Convertir fechas a string si existen
-                            fecha_inicio_str = fecha_inicio_input.strftime("%Y-%m-%d") if fecha_inicio_input else None
-                            fecha_fin_str = fecha_fin_input.strftime("%Y-%m-%d") if fecha_fin_input else None
-
                             incidencias = obtener_incidencias_devops(
                                 st.session_state.devops_org,
                                 st.session_state.devops_project,
@@ -2808,10 +2780,7 @@ with tab_devops:
                                 work_item_types=work_item_types,
                                 max_items=max_items,
                                 states=work_item_states if work_item_states else None,
-                                fecha_inicio=fecha_inicio_str,
-                                fecha_fin=fecha_fin_str,
-                                assigned_to=assigned_to_input if assigned_to_input else None,
-                                fecha_tipo=fecha_tipo
+                                assigned_to=assigned_to_input if assigned_to_input else None
                             )
 
                         if incidencias:
