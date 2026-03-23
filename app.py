@@ -14,7 +14,15 @@ import docx
 from io import BytesIO
 import PyPDF2
 import re
-from tilena_api import TilenaAPI, SEARCH_FIELDS, TICKET_STATUS, format_ticket_for_display
+from tilena_api import (
+    TilenaAPI,
+    SEARCH_FIELDS,
+    TICKET_STATUS,
+    TASK_STATUS,
+    TASK_SEARCH_FIELDS,
+    format_ticket_for_display,
+    format_task_for_display
+)
 
 # ==================================================
 # USUARIOS FIJOS
