@@ -431,19 +431,28 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
         # Obtener detalles en lotes de 200
         all_items = []
         batch_size = 200
-        
+
+        # Crear placeholder para progreso de comentarios
+        comments_progress = st.empty()
+
         for i in range(0, len(work_item_ids), batch_size):
             batch_ids = work_item_ids[i:i+batch_size]
             ids_str = ",".join(map(str, batch_ids))
             details_url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/workitems?ids={ids_str}&api-version=7.1"
-            
+
             details_response = requests.get(details_url, headers=headers, timeout=30)
             details_response.raise_for_status()
-            
+
             for item in details_response.json().get("value", []):
                 fields = item.get("fields", {})
+                work_item_id = item["id"]
+
+                # Obtener comentarios del work item
+                comments_progress.info(f"📝 Obteniendo comentarios de work item {work_item_id}... ({len(all_items)+1}/{len(work_item_ids)})")
+                comentarios = obtener_comentarios_workitem(organization, project, pat, work_item_id)
+
                 all_items.append({
-                    "id": item["id"],
+                    "id": work_item_id,
                     "tipo": fields.get("System.WorkItemType", ""),
                     "titulo": fields.get("System.Title", "Sin título"),
                     "descripcion": fields.get("System.Description", "Sin descripción"),
@@ -453,9 +462,11 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
                     "resolucion": fields.get("Microsoft.VSTS.Common.ResolvedReason", ""),
                     "fecha_creacion": fields.get("System.CreatedDate", ""),
                     "fecha_cambio": fields.get("System.ChangedDate", ""),
-                    "url": item.get("url", "")
+                    "url": item.get("url", ""),
+                    "comentarios": comentarios  # Nueva propiedad con comentarios
                 })
-        
+
+        comments_progress.empty()  # Limpiar mensaje de progreso
         return all_items
     
     except requests.exceptions.Timeout:
@@ -505,17 +516,71 @@ def obtener_attachments_workitem(organization, project, pat, work_item_id):
         st.error(f"Error al obtener attachments: {str(e)}")
         return []
 
+def obtener_comentarios_workitem(organization, project, pat, work_item_id):
+    """
+    Obtiene los comentarios de un work item de Azure DevOps
+
+    Args:
+        organization: Organización de Azure DevOps
+        project: Proyecto de Azure DevOps
+        pat: Personal Access Token
+        work_item_id: ID del work item
+
+    Returns:
+        Lista de comentarios ordenados de más reciente a más antiguo
+    """
+    url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/workItems/{work_item_id}/comments?api-version=7.1-preview.3"
+
+    credentials = f":{pat}"
+    encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Basic {encoded_credentials}"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        comments_data = response.json()
+        comments = comments_data.get("comments", [])
+
+        # Ordenar por fecha más reciente primero
+        comments_sorted = sorted(
+            comments,
+            key=lambda x: x.get("createdDate", ""),
+            reverse=True
+        )
+
+        # Formatear comentarios
+        formatted_comments = []
+        for comment in comments_sorted:
+            formatted_comments.append({
+                "text": comment.get("text", ""),
+                "createdBy": comment.get("createdBy", {}).get("displayName", "Unknown"),
+                "createdDate": comment.get("createdDate", ""),
+                "modifiedDate": comment.get("modifiedDate", "")
+            })
+
+        return formatted_comments
+
+    except Exception as e:
+        # No mostrar error en UI, solo retornar lista vacía
+        # Algunos work items pueden no tener comentarios o dar error 404
+        return []
+
 def descargar_attachment_devops(attachment_url, pat):
     """
     Descarga un attachment desde Azure DevOps
     """
     credentials = f":{pat}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
-    
+
     headers = {
         "Authorization": f"Basic {encoded_credentials}"
     }
-    
+
     try:
         response = requests.get(attachment_url, headers=headers, timeout=30)
         response.raise_for_status()
@@ -675,13 +740,14 @@ def buscar_incidencias_similares(query, incidencias, embeddings, modelo, top_k=5
 def construir_contexto_devops(incidencias_similares):
     """
     Construye el contexto para enviar a la IA con las incidencias encontradas
+    Incluye comentarios si están disponibles
     """
     contexto = "**Work items similares encontrados en Azure DevOps:**\n\n"
-    
+
     for i, resultado in enumerate(incidencias_similares, 1):
         inc = resultado["incidencia"]
         sim = resultado["similitud"]
-        
+
         contexto += f"**Work Item #{i}** (Similitud: {sim:.2%})\n"
         contexto += f"- **ID**: {inc['id']}\n"
         contexto += f"- **Tipo**: {inc['tipo']}\n"
@@ -690,8 +756,23 @@ def construir_contexto_devops(incidencias_similares):
         if inc['resolucion']:
             contexto += f"- **Resolución**: {inc['resolucion']}\n"
         contexto += f"- **Descripción**: {limpiar_html(inc['descripcion'])[:500]}...\n"
-        contexto += f"- **Tags**: {inc['tags']}\n\n"
-    
+        contexto += f"- **Tags**: {inc['tags']}\n"
+
+        # Incluir comentarios si existen
+        if 'comentarios' in inc and inc['comentarios']:
+            contexto += f"- **Comentarios** ({len(inc['comentarios'])} total):\n"
+            # Mostrar hasta los 5 comentarios más recientes
+            for j, comment in enumerate(inc['comentarios'][:5], 1):
+                comment_text = limpiar_html(comment.get('text', '')).strip()
+                if comment_text:
+                    created_by = comment.get('createdBy', 'Unknown')
+                    created_date = comment.get('createdDate', '')[:10]  # Solo fecha YYYY-MM-DD
+                    contexto += f"  {j}. [{created_by} - {created_date}]: {comment_text[:200]}...\n"
+            if len(inc['comentarios']) > 5:
+                contexto += f"  ... y {len(inc['comentarios']) - 5} comentarios más\n"
+
+        contexto += "\n"
+
     return contexto
 
 # ==================================================
@@ -2975,7 +3056,7 @@ with tab_devops:
 
     # ================= SUBTAB 1: CONSULTA WORK ITEMS =================
     with subtab_workitems:
-        st.subheader("💬 Consultas sobre Work Items")
+        st.subheader("💬 Consultas sobre Work Items (con comentarios)")
 
         # Chat de consultas
         if not st.session_state.devops_indexed:
@@ -3015,7 +3096,7 @@ with tab_devops:
                         st.markdown(m["content"])
     
                 if devops_query := st.chat_input(
-                    "Pregunta sobre work items... ej: '¿Cómo se implementó X?'",
+                    "Pregunta sobre work items... ej: 'Dame info del item 12345', 'Últimos bugs creados', '¿Cómo se resolvió X?'",
                     key="devops_chat",
                     disabled=not st.session_state.devops_indexed
                 ):
@@ -3037,15 +3118,17 @@ with tab_devops:
     
                         contexto = construir_contexto_devops(resultados)
     
-                        system_prompt = """Eres un asistente técnico experto en analizar work items de software.
-    
+                        system_prompt = """Eres un asistente técnico experto en analizar work items de Azure DevOps.
+
     Cuando respondas:
-    1. Analiza los work items similares (pueden ser Bugs, User Stories, Tasks, etc.)
-    2. Si hay coincidencia exacta o similar, explica cómo se resolvió o implementó
-    3. Si no hay coincidencia exacta, propón soluciones basadas en casos similares
-    4. Sé específico y técnico
-    5. Menciona el ID y tipo de los work items relevantes
-    6. Si encuentras patrones comunes, menciónalo"""
+    1. Analiza TODOS los work items proporcionados (Bugs, User Stories, Tasks, Features, Epics, etc.)
+    2. Responde a CUALQUIER consulta sobre los work items: información específica de un ID, listados, búsquedas, estadísticas, etc.
+    3. Utiliza la información completa disponible: descripción, resolución, tags, estado, área y COMENTARIOS
+    4. Los comentarios son muy importantes ya que contienen discusiones, soluciones y contexto adicional
+    5. Si preguntan por un ID específico, proporciona toda la información disponible de ese work item
+    6. Si preguntan por tipos específicos (bugs, tareas, etc.) o criterios (recientes, por estado, etc.), filtra y presenta la información relevante
+    7. Sé específico, técnico y menciona siempre los IDs de los work items relevantes
+    8. Si encuentras patrones comunes o información relacionada en los comentarios, menciónalo"""
     
                         payload = {
                             "model": st.session_state.model,
@@ -3069,7 +3152,7 @@ with tab_devops:
                             for i, resultado in enumerate(resultados, 1):
                                 inc = resultado["incidencia"]
                                 sim = resultado["similitud"]
-    
+
                                 st.markdown(f"### Work Item {i} - [{inc['tipo']}] ID: {inc['id']} (Similitud: {sim:.1%})")
                                 st.markdown(f"**Título:** {inc['titulo']}")
                                 st.markdown(f"**Estado:** {inc['estado']}")
@@ -3079,6 +3162,19 @@ with tab_devops:
                                 st.markdown(f"**Descripción:** {limpiar_html(inc['descripcion'])[:300]}...")
                                 if inc['tags']:
                                     st.markdown(f"**Tags:** {inc['tags']}")
+
+                                # Mostrar comentarios si existen
+                                if 'comentarios' in inc and inc['comentarios']:
+                                    st.markdown(f"**💬 Comentarios ({len(inc['comentarios'])}):**")
+                                    for j, comment in enumerate(inc['comentarios'][:3], 1):  # Mostrar máximo 3
+                                        comment_text = limpiar_html(comment.get('text', '')).strip()
+                                        if comment_text:
+                                            created_by = comment.get('createdBy', 'Unknown')
+                                            created_date = comment.get('createdDate', '')[:10]
+                                            st.markdown(f"  {j}. **{created_by}** ({created_date}): {comment_text[:150]}...")
+                                    if len(inc['comentarios']) > 3:
+                                        st.markdown(f"  _... y {len(inc['comentarios']) - 3} comentarios más_")
+
                                 st.markdown("---")
     
                         st.rerun()
