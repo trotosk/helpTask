@@ -457,32 +457,55 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
             add_log(f"👤 Asignado a: {assigned_to}", "info")
         add_log(f"🔢 Límite: {max_items} items", "info")
 
+        # Log del JSON REQUEST
+        add_log("📤 REQUEST JSON a Azure DevOps:", "debug")
+        add_log(json.dumps(wiql, indent=2, ensure_ascii=False), "debug")
+
         response = requests.post(url, json=wiql, headers=headers, timeout=30)
         add_log(f"Status Code: {response.status_code}", "debug")
+
+        # Log del JSON RESPONSE
+        add_log("📥 RESPONSE JSON de Azure DevOps:", "debug")
 
         if response.status_code != 200:
             add_log(f"❌ Error HTTP {response.status_code}", "error")
             add_log(f"Response: {response.text[:500]}", "error")
             return []
-        
+
         response.raise_for_status()
-        
+
         try:
             response_json = response.json()
+            # Log del contenido de la respuesta
+            add_log(json.dumps(response_json, indent=2, ensure_ascii=False), "debug")
         except json.JSONDecodeError as e:
             st.error(f"❌ Error al parsear JSON: {str(e)}")
             st.code(response.text[:500])
             return []
-        
+
         work_item_ids = [item["id"] for item in response_json.get("workItems", [])]
+
+        # Log de los IDs obtenidos
+        add_log(f"🔢 Total de Work Items IDs obtenidos: {len(work_item_ids)}", "info")
+        if work_item_ids:
+            add_log(f"📋 Primeros 10 IDs: {work_item_ids[:10]}", "debug")
+            add_log(f"📋 Últimos 10 IDs: {work_item_ids[-10:]}", "debug")
         
         if not work_item_ids:
             st.warning("⚠️ La query no devolvió ningún Work Item")
             st.info("Verifica que existan items del tipo seleccionado")
             return []
-        
+
+        # Log antes de limitar
+        add_log(f"📊 Total de IDs antes de limitar: {len(work_item_ids)}", "info")
+
         # Limitar al máximo configurado
         work_item_ids = work_item_ids[:max_items]
+        add_log(f"✂️ IDs después de limitar a {max_items}: {len(work_item_ids)}", "info")
+        if len(work_item_ids) > 0:
+            add_log(f"🔝 Primeros IDs después de limitar: {work_item_ids[:10]}", "debug")
+            add_log(f"🔽 Últimos IDs después de limitar: {work_item_ids[-10:]}", "debug")
+
         st.success(f"✅ Se encontraron {len(work_item_ids)} work items")
         
         # Obtener detalles en lotes de 200
@@ -530,6 +553,15 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
                 })
 
         comments_progress.empty()  # Limpiar mensaje de progreso
+
+        # Log de los items finales procesados
+        add_log(f"✅ Total de items procesados: {len(all_items)}", "success")
+        if all_items:
+            primeros_ids = [item["id"] for item in all_items[:10]]
+            ultimos_ids = [item["id"] for item in all_items[-10:]]
+            add_log(f"🔝 Primeros 10 IDs procesados: {primeros_ids}", "debug")
+            add_log(f"🔽 Últimos 10 IDs procesados: {ultimos_ids}", "debug")
+
         return all_items
     
     except requests.exceptions.Timeout:
