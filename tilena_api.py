@@ -344,6 +344,143 @@ class TilenaAPI:
             print(f"Error en búsqueda: {str(e)}")
             return None
 
+    def search_tasks(
+        self,
+        criteria: Optional[List[Dict]] = None,
+        range_start: int = 0,
+        range_end: int = 50,
+        sort: int = 2,  # 2 = ID (por defecto ordenar por ID)
+        order: str = "DESC",
+        status: Optional[List[int]] = None,
+        fecha_inicio: Optional[str] = None,
+        fecha_fin: Optional[str] = None,
+        asignados: Optional[List[int]] = None
+    ) -> Optional[List[Dict]]:
+        """
+        Busca tareas (TicketTask) con filtros específicos
+
+        Args:
+            criteria: Lista de criterios de búsqueda personalizados (opcional)
+            range_start: Inicio del rango de paginación
+            range_end: Fin del rango de paginación
+            sort: ID del campo por el que ordenar (2 = ID, 10 = fecha modificación)
+            order: Orden (ASC o DESC), por defecto DESC para mostrar más recientes primero
+            status: Lista de estados para filtrar (0=Pendiente, 1=En curso, 2=Completada)
+            fecha_inicio: Fecha inicio del rango (formato YYYY-MM-DD)
+            fecha_fin: Fecha fin del rango (formato YYYY-MM-DD)
+            asignados: Lista de IDs de usuarios asignados
+
+        Returns:
+            Lista de tareas encontradas
+
+        Field IDs comunes para TicketTask:
+            1: Título/Nombre
+            2: ID
+            3: Estado
+            5: Asignado a (técnico)
+            7: Fecha inicio planificada
+            8: Fecha fin planificada
+            9: Fecha de creación
+            10: Fecha de modificación
+            13: ID del ticket padre
+        """
+        if not self.session_token:
+            success, error_msg = self.init_session()
+            if not success:
+                print(f"[ERROR] No se pudo iniciar sesión: {error_msg}")
+                return None
+
+        headers = self._get_headers()
+
+        # Construir parámetros de búsqueda
+        params = {
+            "range": f"{range_start}-{range_end}",
+            "sort": sort,
+            "order": order,
+            "forcedisplay[0]": 1,   # Título
+            "forcedisplay[1]": 2,   # ID
+            "forcedisplay[2]": 3,   # Estado
+            "forcedisplay[3]": 5,   # Asignado a
+            "forcedisplay[4]": 7,   # Fecha inicio
+            "forcedisplay[5]": 8,   # Fecha fin
+            "forcedisplay[6]": 9,   # Fecha creación
+            "forcedisplay[7]": 10,  # Fecha modificación
+            "forcedisplay[8]": 13,  # Ticket ID
+        }
+
+        # Construir criterios de búsqueda
+        search_criteria = criteria if criteria else []
+
+        # Agregar filtro por estados
+        if status:
+            for idx, estado in enumerate(status):
+                if search_criteria and idx == 0:
+                    search_criteria.append({"link": "AND"})
+                elif idx > 0:
+                    search_criteria.append({"link": "OR"})
+                search_criteria.append({
+                    "field": 3,  # Estado
+                    "searchtype": "equals",
+                    "value": estado
+                })
+
+        # Agregar filtro por rango de fechas (usando fecha de modificación)
+        if fecha_inicio:
+            if search_criteria:
+                search_criteria.append({"link": "AND"})
+            search_criteria.append({
+                "field": 10,  # Fecha modificación
+                "searchtype": "morethan",
+                "value": fecha_inicio
+            })
+
+        if fecha_fin:
+            if search_criteria:
+                search_criteria.append({"link": "AND"})
+            search_criteria.append({
+                "field": 10,  # Fecha modificación
+                "searchtype": "lessthan",
+                "value": fecha_fin
+            })
+
+        # Agregar filtro por asignados
+        if asignados:
+            for idx, asignado_id in enumerate(asignados):
+                if search_criteria and idx == 0:
+                    search_criteria.append({"link": "AND"})
+                elif idx > 0:
+                    search_criteria.append({"link": "OR"})
+                search_criteria.append({
+                    "field": 5,  # Asignado a
+                    "searchtype": "equals",
+                    "value": asignado_id
+                })
+
+        # Agregar criterios de búsqueda a los parámetros
+        if search_criteria:
+            for idx, criterion in enumerate(search_criteria):
+                for key, value in criterion.items():
+                    params[f"criteria[{idx}][{key}]"] = value
+
+        try:
+            response = requests.get(
+                f"{self.api_url}/search/TicketTask",
+                headers=headers,
+                params=params,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                return result.get('data', [])
+            else:
+                print(f"Error en búsqueda de tareas: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            print(f"Error en búsqueda de tareas: {str(e)}")
+            return None
+
     def get_search_options(self) -> Optional[Dict]:
         """
         Obtiene las opciones de búsqueda disponibles para Tickets
@@ -374,6 +511,38 @@ class TilenaAPI:
 
         except Exception as e:
             print(f"Error al obtener opciones: {str(e)}")
+            return None
+
+    def get_task_search_options(self) -> Optional[Dict]:
+        """
+        Obtiene las opciones de búsqueda disponibles para Tareas (TicketTask)
+
+        Returns:
+            Dict con las opciones de búsqueda y sus IDs
+        """
+        if not self.session_token:
+            success, error_msg = self.init_session()
+            if not success:
+                print(f"[ERROR] No se pudo iniciar sesión: {error_msg}")
+                return None
+
+        headers = self._get_headers()
+
+        try:
+            response = requests.get(
+                f"{self.api_url}/listSearchOptions/TicketTask",
+                headers=headers,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Error al obtener opciones de tareas: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            print(f"Error al obtener opciones de tareas: {str(e)}")
             return None
 
 
@@ -415,6 +584,26 @@ TICKET_STATUS = {
     6: "Cerrado",
 }
 
+# Estados de tareas comunes en GLPI
+TASK_STATUS = {
+    0: "Pendiente",
+    1: "En curso",
+    2: "Completada",
+}
+
+# Campos de búsqueda para tareas (TicketTask)
+TASK_SEARCH_FIELDS = {
+    "id": 2,
+    "titulo": 1,
+    "estado": 3,
+    "asignado": 5,
+    "fecha_inicio": 7,
+    "fecha_fin": 8,
+    "fecha_creacion": 9,
+    "fecha_modificacion": 10,
+    "ticket_id": 13,
+}
+
 
 def format_ticket_for_display(ticket: Dict) -> str:
     """
@@ -448,5 +637,40 @@ def format_ticket_for_display(ticket: Dict) -> str:
 
     if ticket.get('documents'):
         output.append(f"**Documentos:** {len(ticket['documents'])}")
+
+    return "\n".join(output)
+
+
+def format_task_for_display(task: Dict) -> str:
+    """
+    Formatea una tarea para mostrar de forma legible
+
+    Args:
+        task: Diccionario con datos de la tarea
+
+    Returns:
+        String formateado con la información de la tarea
+    """
+    output = []
+    output.append(f"📋 **Tarea #{task.get('id', 'N/A')}**")
+    output.append(f"**Título:** {task.get('name', 'Sin título')}")
+
+    status_id = task.get('state', 0)
+    status_name = TASK_STATUS.get(status_id, f"Estado {status_id}")
+    output.append(f"**Estado:** {status_name}")
+
+    output.append(f"**Ticket asociado:** #{task.get('tickets_id', 'N/A')}")
+    output.append(f"**Asignado a:** {task.get('users_id_tech', 'Sin asignar')}")
+    output.append(f"**Fecha creación:** {task.get('date', 'N/A')}")
+    output.append(f"**Última modificación:** {task.get('date_mod', 'N/A')}")
+
+    if task.get('begin'):
+        output.append(f"**Inicio planificado:** {task.get('begin')}")
+
+    if task.get('end'):
+        output.append(f"**Fin planificado:** {task.get('end')}")
+
+    if task.get('content'):
+        output.append(f"\n**Descripción:**\n{task.get('content')}")
 
     return "\n".join(output)
