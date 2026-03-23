@@ -355,39 +355,82 @@ def cargar_modelo_embeddings():
     """Carga el modelo de embeddings una sola vez"""
     return SentenceTransformer('all-MiniLM-L6-v2')
 
-def obtener_incidencias_devops(organization, project, pat, area_path=None, work_item_types=None, max_items=400):
+def obtener_incidencias_devops(organization, project, pat, area_path=None, work_item_types=None, max_items=400, states=None, fecha_inicio=None, fecha_fin=None, assigned_to=None, fecha_tipo='ChangedDate'):
     """
     Obtiene work items de Azure DevOps con filtros configurables
+
+    Args:
+        organization: Organización de Azure DevOps
+        project: Proyecto
+        pat: Personal Access Token
+        area_path: Ruta del área (opcional)
+        work_item_types: Lista de tipos de work items (opcional)
+        max_items: Máximo de items a retornar
+        states: Lista de estados a filtrar (opcional, ej: ['New', 'Active', 'Resolved'])
+        fecha_inicio: Fecha inicio para filtrado (formato: YYYY-MM-DD)
+        fecha_fin: Fecha fin para filtrado (formato: YYYY-MM-DD)
+        assigned_to: Usuario asignado para filtrar (opcional)
+        fecha_tipo: Tipo de fecha para filtrar ('CreatedDate' o 'ChangedDate')
     """
     url = f"https://dev.azure.com/{organization}/{project}/_apis/wit/wiql?api-version=7.1"
-    
+
     # Construir filtro de tipos
     if not work_item_types or len(work_item_types) == 0:
         work_item_types = ['Bug']
-    
+
     if len(work_item_types) == 1:
         type_filter = f"[System.WorkItemType] = '{work_item_types[0]}'"
     else:
         types_str = "', '".join(work_item_types)
         type_filter = f"[System.WorkItemType] IN ('{types_str}')"
-    
+
     # Construir filtro de área
     area_filter = ""
     if area_path:
         area_filter = f"AND [System.AreaPath] = '{area_path}'"
-    
+
+    # Construir filtro de estados
+    state_filter = ""
+    if states and len(states) > 0:
+        if len(states) == 1:
+            state_filter = f"AND [System.State] = '{states[0]}'"
+        else:
+            states_str = "', '".join(states)
+            state_filter = f"AND [System.State] IN ('{states_str}')"
+    else:
+        # Solo excluir 'Removed' si no se especificaron estados
+        state_filter = "AND [System.State] <> 'Removed'"
+
+    # Construir filtro de fechas
+    fecha_filter = ""
+    campo_fecha = f"System.{fecha_tipo}"
+    if fecha_inicio and fecha_fin:
+        fecha_filter = f"AND [{campo_fecha}] >= '{fecha_inicio}' AND [{campo_fecha}] <= '{fecha_fin}'"
+    elif fecha_inicio:
+        fecha_filter = f"AND [{campo_fecha}] >= '{fecha_inicio}'"
+    elif fecha_fin:
+        fecha_filter = f"AND [{campo_fecha}] <= '{fecha_fin}'"
+
+    # Construir filtro de asignado
+    assigned_filter = ""
+    if assigned_to:
+        assigned_filter = f"AND [System.AssignedTo] = '{assigned_to}'"
+
     wiql = {
         "query": f"""
-            SELECT [System.Id], [System.Title], [System.State], 
-                   [System.Description], [System.Tags], 
+            SELECT [System.Id], [System.Title], [System.State],
+                   [System.Description], [System.Tags],
                    [System.WorkItemType], [System.AreaPath],
                    [Microsoft.VSTS.Common.ResolvedReason],
-                   [System.CreatedDate], [System.ChangedDate]
-            FROM WorkItems 
+                   [System.CreatedDate], [System.ChangedDate],
+                   [System.AssignedTo]
+            FROM WorkItems
             WHERE {type_filter}
-            AND [System.State] <> 'Removed'
+            {state_filter}
             {area_filter}
-            ORDER BY [System.ChangedDate] DESC
+            {fecha_filter}
+            {assigned_filter}
+            ORDER BY [{campo_fecha}] DESC
         """
     }
     
@@ -406,6 +449,12 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
         add_log(f"📋 Tipos: {', '.join(work_item_types)}", "info")
         if area_path:
             add_log(f"📁 Área: {area_path}", "info")
+        if states:
+            add_log(f"📊 Estados: {', '.join(states)}", "info")
+        if fecha_inicio or fecha_fin:
+            add_log(f"📅 Rango de fechas ({fecha_tipo}): {fecha_inicio or 'inicio'} → {fecha_fin or 'ahora'}", "info")
+        if assigned_to:
+            add_log(f"👤 Asignado a: {assigned_to}", "info")
         add_log(f"🔢 Límite: {max_items} items", "info")
 
         response = requests.post(url, json=wiql, headers=headers, timeout=30)
@@ -459,6 +508,11 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
                 comments_progress.info(f"📝 Obteniendo comentarios de work item {work_item_id}... ({len(all_items)+1}/{len(work_item_ids)})")
                 comentarios = obtener_comentarios_workitem(organization, project, pat, work_item_id)
 
+                # Procesar campo AssignedTo (puede ser un objeto o string)
+                assigned_to = fields.get("System.AssignedTo", "")
+                if isinstance(assigned_to, dict):
+                    assigned_to = assigned_to.get("displayName", "")
+
                 all_items.append({
                     "id": work_item_id,
                     "tipo": fields.get("System.WorkItemType", ""),
@@ -470,6 +524,7 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
                     "resolucion": fields.get("Microsoft.VSTS.Common.ResolvedReason", ""),
                     "fecha_creacion": fields.get("System.CreatedDate", ""),
                     "fecha_cambio": fields.get("System.ChangedDate", ""),
+                    "assigned_to": assigned_to,
                     "url": item.get("url", ""),
                     "comentarios": comentarios  # Nueva propiedad con comentarios
                 })
@@ -716,7 +771,9 @@ def generar_embeddings_incidencias(incidencias, modelo):
     """
     textos = []
     for inc in incidencias:
-        texto_completo = f"{inc['titulo']} {limpiar_html(inc['descripcion'])} {inc['tags']} {inc['resolucion']}"
+        # Incluir más información en el texto para mejorar las búsquedas
+        assigned = inc.get('assigned_to', '')
+        texto_completo = f"{inc['titulo']} {limpiar_html(inc['descripcion'])} {inc['tags']} {inc['resolucion']} {inc['estado']} {assigned}"
         textos.append(texto_completo)
     
     with st.spinner("🔄 Generando embeddings de incidencias..."):
@@ -761,6 +818,12 @@ def construir_contexto_devops(incidencias_similares):
         contexto += f"- **Tipo**: {inc['tipo']}\n"
         contexto += f"- **Título**: {inc['titulo']}\n"
         contexto += f"- **Estado**: {inc['estado']}\n"
+        if inc.get('assigned_to'):
+            contexto += f"- **Asignado a**: {inc['assigned_to']}\n"
+        if inc.get('fecha_creacion'):
+            contexto += f"- **Fecha creación**: {inc['fecha_creacion'][:10]}\n"
+        if inc.get('fecha_cambio'):
+            contexto += f"- **Fecha modificación**: {inc['fecha_cambio'][:10]}\n"
         if inc['resolucion']:
             contexto += f"- **Resolución**: {inc['resolucion']}\n"
         contexto += f"- **Descripción**: {limpiar_html(inc['descripcion'])[:500]}...\n"
@@ -2665,6 +2728,22 @@ with tab_devops:
                     help="Deja vacío para todas las áreas"
                 )
 
+                # Filtro de estados
+                work_item_states = st.multiselect(
+                    "Estados (opcional)",
+                    options=["New", "Active", "Resolved", "Closed", "Removed", "In Progress", "To Do", "Done", "Ready", "Committed"],
+                    default=[],
+                    help="Deja vacío para incluir todos los estados (excepto Removed)"
+                )
+
+                # Filtro de usuario asignado
+                assigned_to_input = st.text_input(
+                    "Asignado a (opcional)",
+                    value="",
+                    placeholder="ej: nombre@ejemplo.com o Nombre Apellido",
+                    help="Deja vacío para incluir todos los usuarios"
+                )
+
             with col_filtros2:
                 max_items = st.slider(
                     "Límite de items a traer",
@@ -2684,6 +2763,30 @@ with tab_devops:
                     help="Número de items similares para enviar a Frida"
                 )
 
+                # Filtro de tipo de fecha
+                fecha_tipo = st.selectbox(
+                    "Filtrar por fecha de:",
+                    options=["ChangedDate", "CreatedDate"],
+                    index=0,
+                    format_func=lambda x: "Modificación" if x == "ChangedDate" else "Creación",
+                    help="Selecciona el tipo de fecha para filtrar"
+                )
+
+                # Filtros de rango de fechas
+                col_fecha1, col_fecha2 = st.columns(2)
+                with col_fecha1:
+                    fecha_inicio_input = st.date_input(
+                        "Desde (opcional)",
+                        value=None,
+                        help="Fecha de inicio del rango"
+                    )
+                with col_fecha2:
+                    fecha_fin_input = st.date_input(
+                        "Hasta (opcional)",
+                        value=None,
+                        help="Fecha de fin del rango"
+                    )
+
             st.markdown("---")
 
             col_btn1, col_btn2 = st.columns([3, 1])
@@ -2693,13 +2796,22 @@ with tab_devops:
                         st.error("❌ Selecciona al menos un tipo de work item")
                     else:
                         with st.spinner("📥 Obteniendo work items de Azure DevOps..."):
+                            # Convertir fechas a string si existen
+                            fecha_inicio_str = fecha_inicio_input.strftime("%Y-%m-%d") if fecha_inicio_input else None
+                            fecha_fin_str = fecha_fin_input.strftime("%Y-%m-%d") if fecha_fin_input else None
+
                             incidencias = obtener_incidencias_devops(
                                 st.session_state.devops_org,
                                 st.session_state.devops_project,
                                 st.session_state.devops_pat,
                                 area_path=area_path_input if area_path_input else None,
                                 work_item_types=work_item_types,
-                                max_items=max_items
+                                max_items=max_items,
+                                states=work_item_states if work_item_states else None,
+                                fecha_inicio=fecha_inicio_str,
+                                fecha_fin=fecha_fin_str,
+                                assigned_to=assigned_to_input if assigned_to_input else None,
+                                fecha_tipo=fecha_tipo
                             )
 
                         if incidencias:
@@ -3165,6 +3277,12 @@ with tab_devops:
                                 st.markdown(f"**Título:** {inc['titulo']}")
                                 st.markdown(f"**Estado:** {inc['estado']}")
                                 st.markdown(f"**Área:** {inc['area']}")
+                                if inc.get('assigned_to'):
+                                    st.markdown(f"**Asignado a:** {inc['assigned_to']}")
+                                if inc.get('fecha_creacion'):
+                                    st.markdown(f"**Fecha creación:** {inc['fecha_creacion'][:10]}")
+                                if inc.get('fecha_cambio'):
+                                    st.markdown(f"**Fecha modificación:** {inc['fecha_cambio'][:10]}")
                                 if inc['resolucion']:
                                     st.markdown(f"**Resolución:** {inc['resolucion']}")
                                 st.markdown(f"**Descripción:** {limpiar_html(inc['descripcion'])[:300]}...")
