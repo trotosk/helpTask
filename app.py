@@ -430,7 +430,7 @@ def obtener_incidencias_devops(organization, project, pat, area_path=None, work_
             {area_filter}
             {fecha_filter}
             {assigned_filter}
-            ORDER BY [{campo_fecha}] DESC
+            ORDER BY [System.Id] DESC
         """
     }
     
