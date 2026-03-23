@@ -834,6 +834,40 @@ def buscar_incidencias_similares(query, incidencias, embeddings, modelo, top_k=5
     
     return resultados
 
+def buscar_work_items_por_id(query, incidencias):
+    """
+    Detecta si la query contiene IDs específicos y los busca directamente
+    Retorna (ids_encontrados, ids_no_encontrados, items_encontrados)
+    """
+    # Buscar números de 4-5 dígitos en la query (típicos IDs de Azure DevOps)
+    ids_en_query = re.findall(r'\b\d{4,5}\b', query)
+
+    if not ids_en_query:
+        return [], [], []
+
+    # Convertir a enteros
+    ids_buscados = [int(id_str) for id_str in ids_en_query]
+
+    # Buscar en incidencias
+    ids_disponibles = {inc['id'] for inc in incidencias}
+    items_encontrados = []
+    ids_encontrados = []
+    ids_no_encontrados = []
+
+    for id_buscado in ids_buscados:
+        if id_buscado in ids_disponibles:
+            # Encontrar el item completo
+            item = next(inc for inc in incidencias if inc['id'] == id_buscado)
+            items_encontrados.append({
+                "incidencia": item,
+                "similitud": 1.0  # 100% de similitud para búsqueda exacta por ID
+            })
+            ids_encontrados.append(id_buscado)
+        else:
+            ids_no_encontrados.append(id_buscado)
+
+    return ids_encontrados, ids_no_encontrados, items_encontrados
+
 def construir_contexto_devops(incidencias_similares):
     """
     Construye el contexto para enviar a la IA con las incidencias encontradas
@@ -3225,18 +3259,48 @@ with tab_devops:
                         st.warning("⚠️ Primero debes sincronizar e indexar los work items")
                     else:
                         st.session_state.devops_messages.append({"role": "user", "content": devops_query})
-    
+
                         top_k = st.session_state.get('devops_top_k', 5)
-    
-                        with st.spinner(f"🔍 Buscando los {top_k} work items más similares..."):
-                            resultados = buscar_incidencias_similares(
-                                devops_query,
-                                st.session_state.devops_incidencias,
-                                st.session_state.devops_embeddings,
-                                st.session_state.embedding_model,
-                                top_k=top_k
-                            )
-    
+
+                        # Primero intentar búsqueda por ID específico
+                        ids_encontrados, ids_no_encontrados, items_por_id = buscar_work_items_por_id(
+                            devops_query,
+                            st.session_state.devops_incidencias
+                        )
+
+                        resultados = []
+                        tipo_busqueda = "similitud"  # Por defecto
+
+                        if ids_encontrados or ids_no_encontrados:
+                            # El usuario preguntó por IDs específicos
+                            if items_por_id:
+                                # Se encontraron los IDs
+                                resultados = items_por_id
+                                tipo_busqueda = "id_exacto"
+                                st.info(f"🎯 Búsqueda por ID: Se encontró{'ron' if len(ids_encontrados) > 1 else ''} el work item{' ' if len(ids_encontrados) == 1 else 's '}con ID{'s' if len(ids_encontrados) > 1 else ''}: {', '.join(map(str, ids_encontrados))}")
+
+                            if ids_no_encontrados:
+                                # Algunos IDs no se encontraron
+                                ids_disponibles = sorted([inc['id'] for inc in st.session_state.devops_incidencias])
+                                st.warning(f"⚠️ No se encontraron work items con ID(s): {', '.join(map(str, ids_no_encontrados))}")
+                                st.info(f"📊 IDs disponibles en los datos indexados: {', '.join(map(str, ids_disponibles[:20]))}{'...' if len(ids_disponibles) > 20 else ''} (Total: {len(ids_disponibles)} items)")
+
+                                if not items_por_id:
+                                    # No se encontró ningún ID, no continuar con la consulta
+                                    st.rerun()
+
+                        if not resultados:
+                            # No se buscaron IDs específicos o no se encontraron, usar búsqueda semántica
+                            with st.spinner(f"🔍 Buscando los {top_k} work items más similares..."):
+                                resultados = buscar_incidencias_similares(
+                                    devops_query,
+                                    st.session_state.devops_incidencias,
+                                    st.session_state.devops_embeddings,
+                                    st.session_state.embedding_model,
+                                    top_k=top_k
+                                )
+                                tipo_busqueda = "similitud"
+
                         contexto = construir_contexto_devops(resultados)
     
                         system_prompt = """Eres un asistente técnico experto en analizar work items de Azure DevOps.
@@ -3268,8 +3332,14 @@ with tab_devops:
                             respuesta = call_ia(payload)
     
                         st.session_state.devops_messages.append({"role": "assistant", "content": respuesta})
-    
-                        with st.expander(f"📋 Ver los {top_k} work items más similares"):
+
+                        # Título del expander según el tipo de búsqueda
+                        if tipo_busqueda == "id_exacto":
+                            expander_title = f"📋 Ver work item{'s' if len(resultados) > 1 else ''} encontrado{'s' if len(resultados) > 1 else ''} (búsqueda por ID)"
+                        else:
+                            expander_title = f"📋 Ver los {len(resultados)} work items más similares"
+
+                        with st.expander(expander_title):
                             for i, resultado in enumerate(resultados, 1):
                                 inc = resultado["incidencia"]
                                 sim = resultado["similitud"]
