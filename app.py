@@ -29,7 +29,8 @@ from tilena_api import (
 # ==================================================
 USERS = {
     "antonio.alcaraz@softtek.com": "123456",
-    "tester@softtek.com": "123456"
+    "tester@softtek.com": "123456",
+    "des@softtek.com": "123456"
 }
 
 if "logged_in" not in st.session_state:
