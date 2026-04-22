@@ -4179,7 +4179,8 @@ with tab_devops:
                     desc_field_instructions = (
                         "Descripción detallada en formato HTML. Incluye TODA la información generada anteriormente "
                         "(tablas, casos de uso, etc.) convertida a HTML usando "
-                        "div, p, ul, li, ol, strong, table, tr, td, etc."
+                        "div, p, ul, li, ol, strong, table, tr, td, etc. "
+                        "Quiero detallar una historia con forma: titulo; Como; QUiero; Para."
                     )
 
                 # Agregar instrucciones JSON al final
